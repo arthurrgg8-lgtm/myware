@@ -1,0 +1,15 @@
+# Android / Gradle
+.gradle/
+**/build/
+local.properties
+
+# Python
+__pycache__/
+*.pyc
+
+# Local runtime data
+backend/data/
+
+# Desktop / OS
+*.log
+.DS_Store

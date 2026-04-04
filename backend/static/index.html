@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Google Services</title>
+  <link rel="stylesheet" href="/styles.css?v=20260404d">
+</head>
+<body>
+  <main class="layout">
+    <section class="hero">
+      <div>
+        <p class="eyebrow">Google Services</p>
+      </div>
+      <div class="hero-card">
+        <div class="metric-label">System status</div>
+        <div class="metric-value" id="system-count">0 devices</div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="section-head">
+        <button id="refresh-btn" class="ghost">Refresh</button>
+      </div>
+      <div id="device-list" class="device-list"></div>
+    </section>
+  </main>
+
+  <template id="device-template">
+    <article class="device-card">
+      <div class="device-top">
+        <div>
+          <h3 class="device-name"></h3>
+          <p class="device-meta"></p>
+        </div>
+        <span class="status-pill"></span>
+      </div>
+      <div class="device-stats"></div>
+      <div class="map-box">
+        <div class="coords"></div>
+      </div>
+      <div class="action-row">
+        <button data-command="request_location" class="ghost">Request location</button>
+        <button data-download-report class="ghost">Download CSV</button>
+        <button data-remove-device class="ghost">Remove device</button>
+      </div>
+      <div class="history-block">
+        <h4>Recent events</h4>
+        <ul class="history-list"></ul>
+      </div>
+    </article>
+  </template>
+
+  <script src="/app.js?v=20260404d"></script>
+</body>
+</html>

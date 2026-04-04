@@ -1,0 +1,11 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <style name="Theme.LostTracker" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">#4285F4</item>
+        <item name="colorPrimaryVariant">#1A73E8</item>
+        <item name="colorSecondary">#34A853</item>
+        <item name="android:statusBarColor" tools:targetApi="l">#FFFFFF</item>
+        <item name="android:navigationBarColor" tools:targetApi="l">#FFFFFF</item>
+        <item name="android:windowLightStatusBar" tools:targetApi="m">true</item>
+        <item name="android:windowBackground">#FFFFFF</item>
+    </style>
+</resources>

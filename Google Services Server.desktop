@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Google Services Server
+Comment=Launch the Google Services backend and dashboard
+Exec=bash -lc 'cd /home/lazzy/Desktop/myware && ./launch-google-services.sh'
+Icon=utilities-terminal
+Terminal=true
+Categories=Utility;
