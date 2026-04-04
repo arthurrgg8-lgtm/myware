@@ -1,40 +1,66 @@
 # Google Services
 
-Android tracking client plus a small Python backend dashboard for local or tunneled device reporting.
+Google Services is a two-part project:
 
-## Project Layout
+- an Android app that enrolls a device and reports status and location data
+- a lightweight Python backend that stores device state and serves a browser dashboard
 
-- `android-app/`: Android application package (`com.lazzy.losttracker`)
-- `backend/`: Python HTTP server, SQLite database, and browser dashboard
-- `launch-google-services.sh`: convenience launcher for the backend on port `8091`
+This repository is intended to be understandable and runnable by a new human or AI agent without prior chat context.
 
-## Current Behavior
+## Repository Layout
 
-### Android app
+- `android-app/`: Android client source and Gradle build files
+- `backend/`: Python HTTP server, dashboard assets, and SQLite runtime data
+- `launch-google-services.sh`: convenience backend launcher on port `8091`
+- `Google Services Server.desktop`: desktop launcher for the backend
 
-- App name: `Google Services`
-- Auto-enrolls and auto-starts tracking after the required Android permissions exist
-- Uses a public 16-digit device ID instead of exposing the internal database row ID
-- Sends device details such as location, battery, network state, Wi-Fi SSID, IP, and ISP when available on the handset
-- Queues hourly report entries locally when the server is unreachable and syncs them later
-- Records hourly failures too, including cases such as location disabled, no fix, or missing permission
+## What The System Does
+
+### Android client
+
+The Android app:
+
+- auto-enrolls after required Android permissions exist
+- auto-starts tracking after setup
+- stores a stable local device token
+- exposes a public 16-digit device ID to the dashboard
+- sends battery, network, Wi-Fi SSID, IP, ISP, and location data when the handset exposes those values
+- records hourly report entries locally and syncs them later when the backend becomes reachable again
+- records hourly failure states too, such as `location disabled`, `no GPS/network fix`, or `permission missing`
 
 ### Backend dashboard
 
-- Serves a dependency-free web UI at `http://127.0.0.1:8091/`
-- Shows enrolled devices, last known coordinates, status, battery, network, and recent events
-- Supports device removal and per-device hourly CSV export
-- Preserves synced history in SQLite under `backend/data/tracker.db`
+The backend:
 
-## Run the Backend
+- stores device state in SQLite
+- serves the dashboard at `http://127.0.0.1:8091/`
+- shows compact per-device cards
+- supports `Request location`
+- supports removing a device from the backend
+- supports per-device hourly CSV export
 
-From the project root:
+## Requirements
+
+### Backend
+
+- Python 3
+- no external Python packages are required for the current server
+
+### Android build
+
+- JDK compatible with the Gradle project
+- Android SDK
+- `adb` if you want direct install or debugging on a connected phone
+
+## Run The Backend
+
+### Recommended
 
 ```bash
 bash /home/lazzy/Desktop/myware/launch-google-services.sh
 ```
 
-Or manually:
+### Manual
 
 ```bash
 cd /home/lazzy/Desktop/myware/backend
@@ -45,28 +71,28 @@ Dashboard URL:
 
 `http://127.0.0.1:8091/`
 
-## Build the APK
+## Build The APK
 
 ```bash
 cd /home/lazzy/Desktop/myware/android-app
 ./gradlew assembleDebug
 ```
 
-Build artifact:
+Build output:
 
 `/home/lazzy/Desktop/myware/android-app/app/build/outputs/apk/debug/app-debug.apk`
 
-Desktop copy used in this workspace:
+Desktop convenience copy used in this workspace:
 
 `/home/lazzy/Desktop/Google Services-debug.apk`
 
-## Install with adb
+## Install The APK With adb
 
 ```bash
 /home/lazzy/Android/Sdk/platform-tools/adb install -r '/home/lazzy/Desktop/Google Services-debug.apk'
 ```
 
-Check connection:
+Check the connected device list:
 
 ```bash
 /home/lazzy/Android/Sdk/platform-tools/adb devices -l
@@ -76,43 +102,65 @@ Check connection:
 
 ### Live updates
 
-For real-time updates, the phone must be able to reach the backend through one of these paths:
+For live reporting, the phone must have a route to the backend through one of these:
 
 - same LAN as the server
-- public tunnel / public backend URL
-- USB with `adb reverse` when testing locally
+- a public tunnel or hosted backend URL
+- USB with `adb reverse` during local testing
 
-### Offline behavior
+### If the backend is down
 
-If the server is down or unreachable:
+If the backend is stopped:
 
-- the APK is not reset or unenrolled
-- queued hourly records stay on the phone
-- the dashboard may show stale warnings until fresh updates arrive again
-- once the backend is reachable, queued hourly reports sync automatically
+- the APK is still installed and keeps its local state
+- enrollment is not lost
+- already-synced data remains in SQLite
+- the dashboard will show stale data until fresh updates arrive again
+- hourly report entries can queue on the phone and sync later when the backend returns
 
-## Hourly CSV Reports
+## Dashboard Status Meaning
 
-Each device can export an hourly CSV report from the dashboard.
+The dashboard marks a device as stale when fresh updates have not arrived recently.
 
-The report includes rows for:
+Important distinction:
+
+- `Location disabled on device`: the phone reported that system Location is off
+- `Network is not connected on device`: the last reported network state was offline and updates are stale
+- `No recent updates received from device`: Location may still be enabled, but the backend has not received fresh updates recently enough
+
+## CSV Export
+
+Each device card can download an hourly CSV report.
+
+The CSV may include:
 
 - successful hourly location captures
-- hourly failures such as `location disabled`, `no GPS/network fix`, or `permission missing`
-- last known coordinates when a fresh fix was unavailable
+- failure rows for missing location or permission conditions
+- last known latitude and longitude when a fresh fix was unavailable
+- the original capture time for that hour, not only the later sync time
 
 ## Important Limits
 
-- A normal Android app cannot silently re-enable the system Location toggle after the user turns it off.
-- Some fields such as carrier name, Wi-Fi SSID, public IP, or ISP depend on Android version, OEM restrictions, permissions, and current network conditions.
-- If the phone has no route to the backend at all, it cannot send live updates until connectivity returns.
+- A normal Android app cannot silently turn the phone master Location toggle back on after the user disables it.
+- Some values such as carrier name, SSID, public IP, and ISP depend on Android version, OEM behavior, permissions, and network conditions.
+- If the phone has no communication path to the backend at all, it cannot send live updates until a path returns.
 
 ## Main Files
 
-- Backend server: `/home/lazzy/Desktop/myware/backend/server.py`
-- Dashboard HTML: `/home/lazzy/Desktop/myware/backend/static/index.html`
-- Dashboard JS: `/home/lazzy/Desktop/myware/backend/static/app.js`
-- Android main activity: `/home/lazzy/Desktop/myware/android-app/app/src/main/java/com/lazzy/losttracker/MainActivity.kt`
-- Android tracker service: `/home/lazzy/Desktop/myware/android-app/app/src/main/java/com/lazzy/losttracker/TrackerService.kt`
-- Android API client: `/home/lazzy/Desktop/myware/android-app/app/src/main/java/com/lazzy/losttracker/ApiClient.kt`
-- Android hourly queue: `/home/lazzy/Desktop/myware/android-app/app/src/main/java/com/lazzy/losttracker/HourlyReportStore.kt`
+- backend server: `backend/server.py`
+- dashboard HTML: `backend/static/index.html`
+- dashboard JS: `backend/static/app.js`
+- dashboard CSS: `backend/static/styles.css`
+- Android main activity: `android-app/app/src/main/java/com/lazzy/losttracker/MainActivity.kt`
+- Android tracker service: `android-app/app/src/main/java/com/lazzy/losttracker/TrackerService.kt`
+- Android API client: `android-app/app/src/main/java/com/lazzy/losttracker/ApiClient.kt`
+- Android prefs: `android-app/app/src/main/java/com/lazzy/losttracker/TrackerPrefs.kt`
+- Android device status collector: `android-app/app/src/main/java/com/lazzy/losttracker/DeviceStatus.kt`
+- Android hourly queue: `android-app/app/src/main/java/com/lazzy/losttracker/HourlyReportStore.kt`
+
+## Notes For Future Maintainers
+
+- `backend/data/` is intentionally git-ignored because it contains machine-local runtime state.
+- `android-app/local.properties` is intentionally git-ignored because it is machine-specific.
+- The GitHub repo contains code and docs, not the live SQLite database from this machine.
+- If you move the project folder again, update the absolute paths in `launch-google-services.sh` and `Google Services Server.desktop`.

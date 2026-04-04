@@ -1,32 +1,42 @@
-# Lost Phone Tracker MVP
+# Backend
 
-Small local prototype for a lost phone tracking system. It includes:
+This folder contains the Python backend for Google Services.
 
-- device enrollment
-- location ping ingestion
-- last seen location and battery status
-- owner actions for lost mode, ring, lock, and found
-- SQLite persistence
+## Files
+
+- `server.py`: HTTP server and API routes
+- `static/`: browser dashboard assets
+- `data/`: SQLite database directory created at runtime
 
 ## Run
 
 ```bash
-cd /home/lazzy/Desktop/lost-phone-tracker-suite/backend
+cd /home/lazzy/Desktop/myware/backend
 HOST=0.0.0.0 PORT=8091 python3 server.py
 ```
 
-Open `http://127.0.0.1:8091` on the computer, or use `http://YOUR-LAN-IP:8091` from the Android phone.
+Open:
 
-## API
+`http://127.0.0.1:8091/`
 
-- `GET /api/devices?includeHistory=true`
-- `GET /api/health`
-- `POST /api/devices`
-- `POST /api/devices/:id/location`
-- `POST /api/devices/:id/actions`
+## API Overview
 
-## Notes
+- `GET /`: dashboard HTML
+- `GET /api/health`: backend health check
+- `GET /api/devices?includeHistory=true`: list devices with history and actions
+- `GET /api/devices/<id>`: single device payload
+- `GET /api/devices/<id>/hourly-report.csv`: CSV export for one device
+- `POST /api/devices`: enroll or reconnect a device
+- `POST /api/devices/<id>/location`: record a location or status update
+- `POST /api/devices/<id>/hourly-reports`: record an hourly report row
+- `POST /api/devices/<id>/commands`: create a device command such as `request_location`
+- `GET /api/devices/<id>/commands`: fetch pending device commands
+- `DELETE /api/devices/<id>`: remove a device from the backend
 
-- The frontend is intentionally dependency-free and uses a simulated location ping form in place of a real mobile app.
-- The Android app can send a stable `deviceToken` so reinstalling the APK reuses the same device record.
-- A real production system would need authenticated users, signed device tokens, encrypted transport, push notifications, and anti-stalking controls.
+## Storage
+
+Runtime data is stored in:
+
+`backend/data/tracker.db`
+
+That directory is intentionally git-ignored.

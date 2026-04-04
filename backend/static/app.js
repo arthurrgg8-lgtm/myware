@@ -59,16 +59,40 @@ function getNetworkLabel(device, isFresh) {
     return "not connected";
   }
   if (device.networkStatus === "wifi") {
-    return device.wifiSsid ? `wifi (${device.wifiSsid})` : "wifi";
+    return device.wifiSsid ? `Wi-Fi • ${device.wifiSsid}` : "Wi-Fi";
   }
   if (device.networkStatus === "cellular") {
-    return device.carrierName ? `cellular (${device.carrierName})` : "cellular";
+    return device.carrierName ? `Cellular • ${device.carrierName}` : "Cellular";
   }
-  return device.networkStatus;
+  if (device.networkStatus === "online") {
+    return "Online";
+  }
+  return device.networkStatus || "Unknown";
 }
 
 function getOptionalDeviceValue(value) {
-  return value || "unavailable on this device";
+  return value || "Unavailable";
+}
+
+function getLocationSummary(device, stateMessage) {
+  if (stateMessage) {
+    return stateMessage;
+  }
+  if (device.lastLatitude != null && device.lastLongitude != null) {
+    return `Live position • ${device.lastLatitude.toFixed(5)}, ${device.lastLongitude.toFixed(5)}`;
+  }
+  return "No location yet";
+}
+
+function getDeviceMeta(device, stateMessage) {
+  if (stateMessage) {
+    return `${device.platform.toUpperCase()} • ${device.ownerEmail} • ${stateMessage}`;
+  }
+  return `${device.platform.toUpperCase()} • ${device.ownerEmail} • Last seen ${formatTime(device.lastSeenAt)}`;
+}
+
+function statItem(label, value, extraClass = "") {
+  return `<div class="stat-item ${extraClass}"><span class="stat-label">${label}</span><strong class="stat-value">${value}</strong></div>`;
 }
 
 function renderDevices() {
@@ -84,35 +108,34 @@ function renderDevices() {
       const node = template.content.firstElementChild.cloneNode(true);
       const stateMessage = getDeviceStateMessage(device);
       const isFresh = isRecent(device.updatedAt);
+      const isHealthy = !stateMessage;
       node.querySelector(".device-name").textContent = device.name;
-      node.querySelector(".device-meta").textContent = stateMessage
-        ? `${device.platform.toUpperCase()} • ${device.ownerEmail} • ${stateMessage}`
-        : `${device.platform.toUpperCase()} • ${device.ownerEmail} • Last seen ${formatTime(device.lastSeenAt)}`;
-      node.querySelector(".status-pill").textContent = device.status;
-      node.querySelector(".status-pill").dataset.status = device.status;
-      node.querySelector(".device-stats").innerHTML = `
-        <div><strong>Device ID:</strong> ${device.id}</div>
-        <div><strong>Battery:</strong> ${device.batteryLevel}%${device.isCharging ? " charging" : ""}</div>
-        <div><strong>Network:</strong> ${getNetworkLabel(device, isFresh)}</div>
-        <div><strong>Carrier:</strong> ${getOptionalDeviceValue(device.carrierName)}</div>
-        <div><strong>Local IP:</strong> ${getOptionalDeviceValue(device.localIp)}</div>
-        <div><strong>Public IP:</strong> ${getOptionalDeviceValue(device.publicIp)}</div>
-        <div><strong>ISP:</strong> ${getOptionalDeviceValue(device.ispName)}</div>
-        <div><strong>Location:</strong> ${device.locationServicesEnabled ? "enabled" : "disabled on device"}</div>
-        <div><strong>Updated:</strong> ${formatTime(device.updatedAt)}</div>
-      `;
+      node.querySelector(".device-meta").textContent = getDeviceMeta(device, stateMessage);
+      const pill = node.querySelector(".status-pill");
+      pill.textContent = isHealthy ? "live" : "attention";
+      pill.dataset.status = isHealthy ? "live" : "attention";
 
-      const coords = stateMessage
-        ? `${stateMessage} • ${getLastKnownLocation(device)}`
-        : device.lastLatitude != null && device.lastLongitude != null
-        ? `${device.lastLatitude.toFixed(5)}, ${device.lastLongitude.toFixed(5)}`
-        : "No location yet";
+      node.querySelector(".device-stats").innerHTML = [
+        statItem("Device ID", device.id),
+        statItem("Battery", `${device.batteryLevel}%${device.isCharging ? " charging" : ""}`),
+        statItem("Network", getNetworkLabel(device, isFresh)),
+        statItem("Carrier", getOptionalDeviceValue(device.carrierName)),
+        statItem("Local IP", getOptionalDeviceValue(device.localIp)),
+        statItem("Public IP", getOptionalDeviceValue(device.publicIp)),
+        statItem("ISP", getOptionalDeviceValue(device.ispName)),
+        statItem("Location", device.locationServicesEnabled ? "Enabled" : "Disabled", device.locationServicesEnabled ? "" : "stat-warning"),
+        statItem("Updated", formatTime(device.updatedAt), !isFresh ? "stat-warning" : "")
+      ].join("");
+
       const coordsNode = node.querySelector(".coords");
       const mapsUrl = getGoogleMapsUrl(device);
+      const locationSummary = getLocationSummary(device, stateMessage);
+      const lastKnown = stateMessage ? getLastKnownLocation(device) : "Open in Google Maps";
+      const locationMarkup = `<span class="coords-label">${locationSummary}</span><span class="coords-subtext">${lastKnown}</span>`;
       if (mapsUrl) {
-        coordsNode.innerHTML = `<a href="${mapsUrl}" target="_blank" rel="noopener noreferrer">${coords}</a>`;
+        coordsNode.innerHTML = `<a href="${mapsUrl}" target="_blank" rel="noopener noreferrer">${locationMarkup}</a>`;
       } else {
-        coordsNode.textContent = coords;
+        coordsNode.innerHTML = locationMarkup;
       }
 
       const history = node.querySelector(".history-list");
@@ -129,7 +152,7 @@ function renderDevices() {
 
       history.innerHTML = mergedEvents.length
         ? mergedEvents.map((entry) => `<li><span>${entry.label}</span><time>${formatTime(entry.time)}</time></li>`).join("")
-        : "<li>No events yet.</li>";
+        : "<li><span>No events yet.</span><time>Waiting</time></li>";
 
       node.querySelectorAll("[data-command]").forEach((button) => {
         button.addEventListener("click", async () => {
@@ -181,12 +204,12 @@ function renderDevices() {
             <h3 class="device-name">${device.name || device.id || "Unknown device"}</h3>
             <p class="device-meta">This device hit a render fallback, but it is still present in the API.</p>
           </div>
-          <span class="status-pill">${device.status || "active"}</span>
+          <span class="status-pill" data-status="attention">attention</span>
         </div>
         <div class="device-stats">
-          <div><strong>Device ID:</strong> ${device.id || "unknown"}</div>
-          <div><strong>Updated:</strong> ${formatTime(device.updatedAt)}</div>
-          <div><strong>Network:</strong> ${device.networkStatus || "unknown"}</div>
+          ${statItem("Device ID", device.id || "unknown")}
+          ${statItem("Updated", formatTime(device.updatedAt))}
+          ${statItem("Network", device.networkStatus || "unknown")}
         </div>
       `;
       list.appendChild(fallback);

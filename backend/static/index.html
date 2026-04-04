@@ -4,23 +4,30 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Google Services</title>
-  <link rel="stylesheet" href="/styles.css?v=20260404e">
+  <link rel="stylesheet" href="/styles.css?v=20260404f">
 </head>
 <body>
   <main class="layout">
     <section class="hero">
-      <div>
+      <div class="hero-copy">
         <p class="eyebrow">Google Services</p>
+        <h1>Device Operations</h1>
+        <p class="hero-text">Live device status, last known location, network details, and hourly exports in one view.</p>
       </div>
       <div class="hero-card">
-        <div class="metric-label">System status</div>
+        <div class="metric-label">Active dashboard</div>
         <div class="metric-value" id="system-count">0 devices</div>
+        <p class="metric-note">Auto-refresh every 5 seconds</p>
       </div>
     </section>
 
-    <section class="panel">
-      <div class="section-head">
-        <button id="refresh-btn" class="ghost">Refresh</button>
+    <section class="panel panel-main">
+      <div class="section-head section-head-main">
+        <div>
+          <h2>Tracked devices</h2>
+          <p class="section-note">Compact device cards with status, network, and latest location context.</p>
+        </div>
+        <button id="refresh-btn" class="ghost action-small">Refresh</button>
       </div>
       <div id="device-list" class="device-list"></div>
     </section>
@@ -42,15 +49,17 @@
       <div class="action-row">
         <button data-command="request_location" class="ghost">Request location</button>
         <button data-download-report class="ghost">Download CSV</button>
-        <button data-remove-device class="ghost">Remove device</button>
+        <button data-remove-device class="ghost danger">Remove device</button>
       </div>
       <div class="history-block">
-        <h4>Recent events</h4>
+        <div class="history-head">
+          <h4>Recent events</h4>
+        </div>
         <ul class="history-list"></ul>
       </div>
     </article>
   </template>
 
-  <script src="/app.js?v=20260404e"></script>
+  <script src="/app.js?v=20260404f"></script>
 </body>
 </html>
