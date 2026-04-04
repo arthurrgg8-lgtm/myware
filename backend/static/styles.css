@@ -176,11 +176,14 @@ button.ghost {
 
 .device-list {
   display: grid;
-  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 18px;
+  align-items: start;
 }
 
 .device-card {
-  padding: 18px;
+  padding: 16px;
+  border-radius: 20px;
 }
 
 .device-name {
@@ -203,14 +206,14 @@ button.ghost {
 
 .device-stats {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-  margin: 14px 0;
-  font-size: 0.95rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+  font-size: 0.92rem;
 }
 
 .map-box {
-  min-height: 120px;
+  min-height: 96px;
   border-radius: 18px;
   border: 1px dashed rgba(31, 41, 51, 0.18);
   background:
@@ -230,11 +233,12 @@ button.ghost {
 }
 
 .action-row {
-  margin: 16px 0;
+  margin: 14px 0;
+  flex-wrap: wrap;
 }
 
 .action-row button {
-  flex: 1;
+  flex: 1 1 140px;
 }
 
 .history-block h4 {
@@ -250,10 +254,10 @@ button.ghost {
 .history-list li {
   display: flex;
   justify-content: space-between;
-  gap: 16px;
-  padding: 10px 0;
+  gap: 12px;
+  padding: 8px 0;
   border-top: 1px solid var(--line);
-  font-size: 0.95rem;
+  font-size: 0.9rem;
 }
 
 @media (max-width: 860px) {
