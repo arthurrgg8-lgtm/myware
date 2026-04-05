@@ -370,11 +370,21 @@ button.danger {
 
 .history-list li span {
   flex: 1;
+  min-width: 0;
+}
+
+.history-list li time {
+  white-space: nowrap;
 }
 
 @media (max-width: 860px) {
+  html {
+    font-size: 14px;
+  }
+
   .hero {
     grid-template-columns: 1fr;
+    gap: 16px;
   }
 
   .device-list {
@@ -382,11 +392,28 @@ button.danger {
   }
 
   .section-head,
-  .device-top,
-  .action-row,
   .history-list li {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .device-top {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .status-pill {
+    min-width: 0;
+  }
+
+  .action-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: stretch;
+  }
+
+  .action-row button:last-child {
+    grid-column: 1 / -1;
   }
 
   .device-stats {
@@ -396,5 +423,94 @@ button.danger {
   .layout {
     width: min(100vw - 20px, 1280px);
     padding-top: 20px;
+  }
+
+  .hero-copy,
+  .hero-card,
+  .panel,
+  .device-card {
+    border-radius: 20px;
+  }
+
+  .hero-copy,
+  .hero-card,
+  .panel {
+    padding: 18px;
+  }
+
+  .device-card {
+    padding: 16px;
+  }
+
+  .metric-value {
+    font-size: 2.2rem;
+  }
+
+  .coords a,
+  .coords {
+    padding: 14px;
+  }
+}
+
+@media (max-width: 560px) {
+  body {
+    background:
+      radial-gradient(circle at top left, rgba(26, 115, 232, 0.12), transparent 34%),
+      linear-gradient(180deg, var(--bg), var(--bg-soft));
+  }
+
+  .layout {
+    width: min(100vw - 14px, 1280px);
+    padding: 12px 0 24px;
+  }
+
+  .hero {
+    margin-bottom: 14px;
+  }
+
+  h1 {
+    font-size: clamp(1.85rem, 10vw, 2.5rem);
+    line-height: 1;
+  }
+
+  .hero-text {
+    margin-top: 10px;
+    line-height: 1.5;
+  }
+
+  .section-head-main {
+    margin-bottom: 14px;
+  }
+
+  .action-small {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .action-row {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .action-row button:last-child {
+    grid-column: auto;
+  }
+
+  .stat-item {
+    min-height: 0;
+    padding: 11px 12px;
+  }
+
+  .map-box {
+    min-height: 88px;
+  }
+
+  .history-list li {
+    gap: 4px;
+    padding: 12px 0;
+  }
+
+  .history-list li time {
+    white-space: normal;
   }
 }
