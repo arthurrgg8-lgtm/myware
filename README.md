@@ -24,9 +24,14 @@ The Android app:
 - auto-starts tracking after setup
 - stores a stable local device token
 - exposes a public 16-digit device ID to the dashboard
+- keeps a required foreground service notification, but leaves it static and silent
+- checks dashboard commands every 2 seconds
+- fetches a fresh location only when the dashboard sends `Request location`
 - sends battery, network, Wi-Fi SSID, IP, ISP, and location data when the handset exposes those values
+- pushes status-only changes such as Wi-Fi, carrier, IP, network state, and location-enabled state without doing routine live location fetches
 - records hourly report entries locally and syncs them later when the backend becomes reachable again
 - records hourly failure states too, such as `location disabled`, `no GPS/network fix`, or `permission missing`
+- automatically re-enrolls if the device is deleted from the dashboard while the APK is still installed
 
 ### Backend dashboard
 
@@ -102,11 +107,20 @@ Check the connected device list:
 
 ### Live updates
 
-For live reporting, the phone must have a route to the backend through one of these:
+For live reporting and fast dashboard commands, the phone must have a route to the backend through one of these:
 
 - same LAN as the server
 - a public tunnel or hosted backend URL
 - USB with `adb reverse` during local testing
+
+### Command and hourly behavior
+
+- The service polls the backend every 2 seconds for pending commands.
+- `Request location` triggers an immediate fresh location fetch from the phone.
+- Routine location is not fetched continuously anymore.
+- Device detail changes such as Wi-Fi, carrier, local IP, network type, and location-enabled state are pushed quickly when they change.
+- The phone still records one hourly report row for CSV export, even when the backend is offline.
+- Queued hourly rows upload when the backend becomes reachable again.
 
 ### If the backend is down
 
@@ -114,6 +128,7 @@ If the backend is stopped:
 
 - the APK is still installed and keeps its local state
 - enrollment is not lost
+- if the device was deleted from the backend, the APK can auto re-enroll when it next reaches the server
 - already-synced data remains in SQLite
 - the dashboard will show stale data until fresh updates arrive again
 - hourly report entries can queue on the phone and sync later when the backend returns
@@ -144,6 +159,7 @@ The CSV may include:
 - A normal Android app cannot silently turn the phone master Location toggle back on after the user disables it.
 - Some values such as carrier name, SSID, public IP, and ISP depend on Android version, OEM behavior, permissions, and network conditions.
 - If the phone has no communication path to the backend at all, it cannot send live updates until a path returns.
+- Android still requires the foreground service notification icon while the background service is running; the app keeps that notification as quiet and static as possible.
 
 ## Main Files
 

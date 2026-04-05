@@ -33,6 +33,13 @@ Open:
 - `GET /api/devices/<id>/commands`: fetch pending device commands
 - `DELETE /api/devices/<id>`: remove a device from the backend
 
+## Current Device Behavior
+
+- Installed phones poll `GET /api/devices/<id>/commands` every 2 seconds for fast dashboard-triggered actions.
+- `POST /api/devices/<id>/location` is used both for dashboard-requested fresh locations and for fast status-only updates such as Wi-Fi, carrier, IP, and network-state changes.
+- `POST /api/devices/<id>/hourly-reports` stores the queued hourly CSV/report rows that the phone syncs when the backend becomes reachable.
+- If a device was deleted from the dashboard but the APK is still installed, the phone can automatically enroll again and reappear as a new backend device record.
+
 ## Storage
 
 Runtime data is stored in:
