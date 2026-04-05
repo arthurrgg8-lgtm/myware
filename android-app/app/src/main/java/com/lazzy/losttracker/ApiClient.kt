@@ -8,6 +8,8 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 object ApiClient {
+    class DeviceNotFoundException(message: String) : IllegalStateException(message)
+
     data class PendingCommand(
         val id: Int,
         val commandType: String
@@ -88,6 +90,23 @@ object ApiClient {
         request("${config.serverUrl}/api/devices/$deviceId/location", "POST", payload)
     }
 
+    fun sendStatusUpdate(
+        config: TrackerConfig,
+        snapshot: DeviceSnapshot,
+        locationServicesEnabled: Boolean,
+        capturedAt: String = java.time.Instant.now().toString(),
+        networkSnapshot: NetworkSnapshot = readNetworkSnapshot()
+    ) {
+        val deviceId = config.deviceId ?: error("Device is not enrolled yet.")
+        val payload = buildLocationPayload(
+            snapshot = snapshot,
+            networkSnapshot = networkSnapshot,
+            capturedAt = capturedAt,
+            locationServicesEnabled = locationServicesEnabled
+        )
+        request("${config.serverUrl}/api/devices/$deviceId/location", "POST", payload)
+    }
+
     fun sendHourlyReport(config: TrackerConfig, report: HourlyReportEntry) {
         val deviceId = config.deviceId ?: error("Device is not enrolled yet.")
         val payload = JSONObject()
@@ -95,6 +114,8 @@ object ApiClient {
             .put("status", report.status)
             .put("reason", report.reason)
             .put("capturedAt", report.capturedAt)
+            .put("deviceTimeZone", report.deviceTimeZone)
+            .put("deviceTimestampMs", report.deviceTimestampMs)
             .put("latitude", report.latitude)
             .put("longitude", report.longitude)
             .put("lastKnownLatitude", report.lastKnownLatitude)
@@ -123,6 +144,10 @@ object ApiClient {
         request("${config.serverUrl}/api/devices/$deviceId/commands/$commandId/complete", "POST", payload)
     }
 
+    fun isDeviceNotFound(error: Throwable): Boolean {
+        return error is DeviceNotFoundException
+    }
+
     private fun request(endpoint: String, method: String, payload: JSONObject? = null): JSONObject {
         val connection = URL(endpoint).openConnection() as HttpURLConnection
         connection.requestMethod = method
@@ -139,6 +164,9 @@ object ApiClient {
         val stream = if (connection.responseCode in 200..299) connection.inputStream else connection.errorStream
         val body = BufferedReader(stream.reader()).use { it.readText() }
         if (connection.responseCode !in 200..299) {
+            if (connection.responseCode == 404 && body.contains("device not found", ignoreCase = true)) {
+                throw DeviceNotFoundException(body.ifBlank { "Device not found" })
+            }
             throw IllegalStateException(body.ifBlank { "Request failed with ${connection.responseCode}" })
         }
         return JSONObject(body)
@@ -167,6 +195,8 @@ object ApiClient {
             .put("ispName", networkSnapshot.ispName)
             .put("locationServicesEnabled", locationServicesEnabled)
             .put("capturedAt", capturedAt)
+            .put("deviceTimeZone", snapshot.deviceTimeZone)
+            .put("deviceTimestampMs", snapshot.deviceTimestampMs)
     }
 
     private fun readPublicNetworkInfo(): PublicNetworkInfo {

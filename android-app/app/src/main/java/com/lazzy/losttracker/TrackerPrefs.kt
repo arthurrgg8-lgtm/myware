@@ -64,6 +64,13 @@ object TrackerPrefs {
             .apply()
     }
 
+    fun clearDeviceId(context: Context) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .remove(KEY_DEVICE_ID)
+            .apply()
+    }
+
     private fun normalizeServerUrl(rawValue: String?): String {
         val cleaned = rawValue.orEmpty().trim().trimEnd('/')
         if (cleaned.isBlank()) {

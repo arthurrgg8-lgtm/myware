@@ -13,6 +13,8 @@ data class HourlyReportEntry(
     val status: String,
     val reason: String?,
     val capturedAt: String,
+    val deviceTimeZone: String,
+    val deviceTimestampMs: Long,
     val latitude: Double?,
     val longitude: Double?,
     val lastKnownLatitude: Double?,
@@ -46,6 +48,10 @@ object HourlyReportStore {
     fun currentHourKey(capturedAt: String): String {
         val instant = Instant.parse(capturedAt)
         return hourFormatter.format(instant.atZone(ZoneId.systemDefault()))
+    }
+
+    fun shouldCaptureForTime(context: Context, deviceId: String, capturedAt: String): Boolean {
+        return !hasEntryForHour(context, deviceId, currentHourKey(capturedAt))
     }
 
     fun hasEntryForHour(context: Context, deviceId: String, hourKey: String): Boolean {
@@ -89,6 +95,9 @@ object HourlyReportStore {
                         status = item.getString("status"),
                         reason = item.optString("reason").takeIf { it.isNotBlank() },
                         capturedAt = item.getString("capturedAt"),
+                        deviceTimeZone = item.optString("deviceTimeZone").takeIf { it.isNotBlank() }
+                            ?: ZoneId.systemDefault().id,
+                        deviceTimestampMs = item.optLong("deviceTimestampMs"),
                         latitude = item.optDouble("latitude").takeIf { !it.isNaN() },
                         longitude = item.optDouble("longitude").takeIf { !it.isNaN() },
                         lastKnownLatitude = item.optDouble("lastKnownLatitude").takeIf { !it.isNaN() },
@@ -109,6 +118,8 @@ object HourlyReportStore {
             .put("status", status)
             .put("reason", reason)
             .put("capturedAt", capturedAt)
+            .put("deviceTimeZone", deviceTimeZone)
+            .put("deviceTimestampMs", deviceTimestampMs)
             .put("latitude", latitude)
             .put("longitude", longitude)
             .put("lastKnownLatitude", lastKnownLatitude)

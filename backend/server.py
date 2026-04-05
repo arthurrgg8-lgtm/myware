@@ -60,6 +60,8 @@ def init_db() -> None:
                 local_ip TEXT,
                 public_ip TEXT,
                 isp_name TEXT,
+                device_time_zone TEXT,
+                device_timestamp_ms INTEGER,
                 last_latitude REAL,
                 last_longitude REAL,
                 last_seen_at TEXT,
@@ -112,6 +114,8 @@ def init_db() -> None:
                 accuracy_m REAL,
                 battery_level INTEGER,
                 network_status TEXT,
+                device_time_zone TEXT,
+                device_timestamp_ms INTEGER,
                 captured_at TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 UNIQUE(device_id, hour_key),
@@ -139,6 +143,8 @@ def row_to_device(row: sqlite3.Row) -> dict:
         "localIp": row["local_ip"],
         "publicIp": row["public_ip"],
         "ispName": row["isp_name"],
+        "deviceTimeZone": row["device_time_zone"],
+        "deviceTimestampMs": row["device_timestamp_ms"],
         "locationServicesEnabled": bool(row["location_services_enabled"]),
         "lastLatitude": row["last_latitude"],
         "lastLongitude": row["last_longitude"],
@@ -202,6 +208,20 @@ def ensure_device_token_column(conn: sqlite3.Connection) -> None:
     if "isp_name" not in columns:
         conn.execute("ALTER TABLE devices ADD COLUMN isp_name TEXT")
         conn.commit()
+    if "device_time_zone" not in columns:
+        conn.execute("ALTER TABLE devices ADD COLUMN device_time_zone TEXT")
+        conn.commit()
+    if "device_timestamp_ms" not in columns:
+        conn.execute("ALTER TABLE devices ADD COLUMN device_timestamp_ms INTEGER")
+        conn.commit()
+    hourly_columns = {row["name"] for row in conn.execute("PRAGMA table_info(hourly_reports)").fetchall()}
+    if hourly_columns:
+        if "device_time_zone" not in hourly_columns:
+            conn.execute("ALTER TABLE hourly_reports ADD COLUMN device_time_zone TEXT")
+            conn.commit()
+        if "device_timestamp_ms" not in hourly_columns:
+            conn.execute("ALTER TABLE hourly_reports ADD COLUMN device_timestamp_ms INTEGER")
+            conn.commit()
     rows_missing_code = conn.execute(
         "SELECT id FROM devices WHERE device_code IS NULL OR device_code = ''"
     ).fetchall()
@@ -509,6 +529,8 @@ class TrackerHandler(BaseHTTPRequestHandler):
         local_ip = (payload.get("localIp") or "").strip() or None
         public_ip = (payload.get("publicIp") or "").strip() or None
         isp_name = (payload.get("ispName") or "").strip() or None
+        device_time_zone = (payload.get("deviceTimeZone") or "").strip() or None
+        device_timestamp_ms = payload.get("deviceTimestampMs")
         location_services_enabled = 0 if payload.get("locationServicesEnabled") is False else 1
         has_coordinates = payload.get("latitude") is not None and payload.get("longitude") is not None
         received_at = now_iso()
@@ -530,6 +552,14 @@ class TrackerHandler(BaseHTTPRequestHandler):
             local_ip = prefer_value(local_ip, existing["local_ip"])
             public_ip = prefer_value(public_ip, existing["public_ip"])
             isp_name = prefer_value(isp_name, existing["isp_name"])
+            device_time_zone = prefer_value(device_time_zone, existing["device_time_zone"])
+            if device_timestamp_ms in (None, ""):
+                device_timestamp_ms = existing["device_timestamp_ms"]
+            else:
+                try:
+                    device_timestamp_ms = int(device_timestamp_ms)
+                except (TypeError, ValueError):
+                    device_timestamp_ms = existing["device_timestamp_ms"]
 
             if has_coordinates:
                 try:
@@ -550,7 +580,7 @@ class TrackerHandler(BaseHTTPRequestHandler):
                     """
                     UPDATE devices
                     SET battery_level = ?, is_charging = ?, network_status = ?, wifi_ssid = ?, carrier_name = ?, local_ip = ?, public_ip = ?, isp_name = ?, location_services_enabled = ?,
-                        last_latitude = ?, last_longitude = ?, last_seen_at = ?, updated_at = ?
+                        device_time_zone = ?, device_timestamp_ms = ?, last_latitude = ?, last_longitude = ?, last_seen_at = ?, updated_at = ?
                     WHERE id = ?
                     """,
                     (
@@ -563,6 +593,8 @@ class TrackerHandler(BaseHTTPRequestHandler):
                         public_ip,
                         isp_name,
                         location_services_enabled,
+                        device_time_zone,
+                        device_timestamp_ms,
                         latitude,
                         longitude,
                         received_at,
@@ -575,7 +607,7 @@ class TrackerHandler(BaseHTTPRequestHandler):
                     """
                     UPDATE devices
                     SET battery_level = ?, is_charging = ?, network_status = ?, wifi_ssid = ?, carrier_name = ?, local_ip = ?, public_ip = ?, isp_name = ?, location_services_enabled = ?,
-                        last_seen_at = ?, updated_at = ?
+                        device_time_zone = ?, device_timestamp_ms = ?, last_seen_at = ?, updated_at = ?
                     WHERE id = ?
                     """,
                     (
@@ -588,6 +620,8 @@ class TrackerHandler(BaseHTTPRequestHandler):
                         public_ip,
                         isp_name,
                         location_services_enabled,
+                        device_time_zone,
+                        device_timestamp_ms,
                         received_at,
                         received_at,
                         device_pk,
@@ -798,6 +832,8 @@ class TrackerHandler(BaseHTTPRequestHandler):
         failure_reason = (payload.get("reason") or "").strip() or None
         battery_level = int(payload.get("batteryLevel", 0))
         network_status = (payload.get("networkStatus") or "online").strip()
+        device_time_zone = (payload.get("deviceTimeZone") or "").strip() or None
+        device_timestamp_ms = payload.get("deviceTimestampMs")
         captured_at = (payload.get("capturedAt") or "").strip() or now_iso()
         created_at = now_iso()
 
@@ -809,6 +845,10 @@ class TrackerHandler(BaseHTTPRequestHandler):
         last_known_latitude = payload.get("lastKnownLatitude")
         last_known_longitude = payload.get("lastKnownLongitude")
         accuracy_m = payload.get("accuracyM")
+        try:
+            device_timestamp_ms = int(device_timestamp_ms) if device_timestamp_ms not in (None, "") else None
+        except (TypeError, ValueError):
+            device_timestamp_ms = None
 
         conn = get_db()
         try:
@@ -821,8 +861,8 @@ class TrackerHandler(BaseHTTPRequestHandler):
                 INSERT INTO hourly_reports (
                     device_id, hour_key, status, failure_reason, latitude, longitude,
                     last_known_latitude, last_known_longitude, accuracy_m, battery_level,
-                    network_status, captured_at, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    network_status, device_time_zone, device_timestamp_ms, captured_at, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(device_id, hour_key) DO UPDATE SET
                     status = excluded.status,
                     failure_reason = excluded.failure_reason,
@@ -833,6 +873,8 @@ class TrackerHandler(BaseHTTPRequestHandler):
                     accuracy_m = excluded.accuracy_m,
                     battery_level = excluded.battery_level,
                     network_status = excluded.network_status,
+                    device_time_zone = excluded.device_time_zone,
+                    device_timestamp_ms = excluded.device_timestamp_ms,
                     captured_at = excluded.captured_at,
                     created_at = excluded.created_at
                 """,
@@ -848,6 +890,8 @@ class TrackerHandler(BaseHTTPRequestHandler):
                     accuracy_m,
                     battery_level,
                     network_status,
+                    device_time_zone,
+                    device_timestamp_ms,
                     captured_at,
                     created_at,
                 ),

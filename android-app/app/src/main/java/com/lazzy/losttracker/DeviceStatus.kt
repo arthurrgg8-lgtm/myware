@@ -12,6 +12,8 @@ import android.os.BatteryManager
 import android.telephony.SubscriptionManager
 import android.telephony.TelephonyManager
 import java.net.Inet4Address
+import java.time.Instant
+import java.time.ZoneId
 
 data class DeviceSnapshot(
     val batteryLevel: Int,
@@ -19,11 +21,15 @@ data class DeviceSnapshot(
     val networkStatus: String,
     val wifiSsid: String?,
     val carrierName: String?,
-    val localIp: String?
+    val localIp: String?,
+    val deviceTime: String,
+    val deviceTimeZone: String,
+    val deviceTimestampMs: Long,
 )
 
 object DeviceStatus {
     fun read(context: Context): DeviceSnapshot {
+        val now = currentDeviceClock()
         val batteryIntent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         val level = batteryIntent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
         val scale = batteryIntent?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
@@ -33,8 +39,30 @@ object DeviceStatus {
             chargingStatus == BatteryManager.BATTERY_STATUS_FULL
 
         val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        val network = connectivityManager.activeNetwork ?: return DeviceSnapshot(batteryLevel, isCharging, "offline", null, null, null)
-        val caps = connectivityManager.getNetworkCapabilities(network) ?: return DeviceSnapshot(batteryLevel, isCharging, "offline", null, null, null)
+        val network = connectivityManager.activeNetwork
+            ?: return DeviceSnapshot(
+                batteryLevel = batteryLevel,
+                isCharging = isCharging,
+                networkStatus = "offline",
+                wifiSsid = null,
+                carrierName = null,
+                localIp = null,
+                deviceTime = now.isoTime,
+                deviceTimeZone = now.timeZone,
+                deviceTimestampMs = now.epochMs,
+            )
+        val caps = connectivityManager.getNetworkCapabilities(network)
+            ?: return DeviceSnapshot(
+                batteryLevel = batteryLevel,
+                isCharging = isCharging,
+                networkStatus = "offline",
+                wifiSsid = null,
+                carrierName = null,
+                localIp = null,
+                deviceTime = now.isoTime,
+                deviceTimeZone = now.timeZone,
+                deviceTimestampMs = now.epochMs,
+            )
         val networkStatus = when {
             caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
             caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
@@ -44,7 +72,34 @@ object DeviceStatus {
         val wifiSsid = if (networkStatus == "wifi") readWifiSsid(context, caps) else null
         val carrierName = readCarrierName(context)
         val localIp = readLocalIp(connectivityManager, network)
-        return DeviceSnapshot(batteryLevel, isCharging, networkStatus, wifiSsid, carrierName, localIp)
+        return DeviceSnapshot(
+            batteryLevel = batteryLevel,
+            isCharging = isCharging,
+            networkStatus = networkStatus,
+            wifiSsid = wifiSsid,
+            carrierName = carrierName,
+            localIp = localIp,
+            deviceTime = now.isoTime,
+            deviceTimeZone = now.timeZone,
+            deviceTimestampMs = now.epochMs,
+        )
+    }
+
+    fun currentDeviceTime(): String = currentDeviceClock().isoTime
+
+    private data class DeviceClockSnapshot(
+        val isoTime: String,
+        val timeZone: String,
+        val epochMs: Long,
+    )
+
+    private fun currentDeviceClock(): DeviceClockSnapshot {
+        val now = Instant.now()
+        return DeviceClockSnapshot(
+            isoTime = now.toString(),
+            timeZone = ZoneId.systemDefault().id,
+            epochMs = now.toEpochMilli(),
+        )
     }
 
     private fun readWifiSsid(context: Context, caps: NetworkCapabilities): String? {
