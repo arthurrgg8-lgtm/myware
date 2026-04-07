@@ -17,6 +17,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import com.google.firebase.messaging.FirebaseMessaging
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -27,14 +28,23 @@ class MainActivity : AppCompatActivity() {
     private val uiHandler = Handler(Looper.getMainLooper())
     private val ioExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private var autoSetupStarted = false
+    private var permissionRequestInFlight = false
+    private var batterySettingsInFlight = false
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) {
-        driveAutomaticSetup()
+        permissionRequestInFlight = false
+        refreshSummary()
+        if (hasTrackingAccess()) {
+          driveAutomaticSetup()
+        }
     }
 
     private val settingsLauncher = registerForActivityResult(StartActivityForResult()) {
+        batterySettingsInFlight = false
+        TrackerPrefs.markBackgroundPromptShown(this)
+        refreshSummary()
         driveAutomaticSetup()
     }
 
@@ -47,6 +57,7 @@ class MainActivity : AppCompatActivity() {
         protectionText = findViewById(R.id.protectionText)
 
         TrackerPrefs.ensureDefaults(this)
+        refreshPushToken()
         refreshSummary()
         driveAutomaticSetup()
     }
@@ -67,6 +78,17 @@ class MainActivity : AppCompatActivity() {
     private fun refreshSummary() {
         val config = TrackerPrefs.load(this)
         deviceIdText.text = "Device ID: ${config.deviceId ?: "preparing"}"
+    }
+
+    private fun refreshPushToken() {
+        runCatching {
+            FirebaseMessaging.getInstance().token
+                .addOnSuccessListener { token ->
+                    if (!token.isNullOrBlank()) {
+                        TrackerPrefs.savePushToken(this, token)
+                    }
+                }
+        }
     }
 
     private fun startScanAnimation() {
@@ -144,15 +166,15 @@ class MainActivity : AppCompatActivity() {
         val missing = wanted.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
-        if (missing.isNotEmpty()) {
+        if (missing.isNotEmpty() && !permissionRequestInFlight) {
+            permissionRequestInFlight = true
             permissionLauncher.launch(missing.toTypedArray())
         }
     }
 
     private fun requestAllRequiredAccess() {
-        when {
-            !hasForegroundLocationPermission() || !hasNotificationPermission() -> requestRuntimePermissions()
-            else -> requestBatteryOptimizationExemption()
+        if (!hasForegroundLocationPermission() || !hasNotificationPermission()) {
+            requestRuntimePermissions()
         }
     }
 
@@ -169,6 +191,7 @@ class MainActivity : AppCompatActivity() {
             else -> {
                 deviceIdText.post {
                     startTrackingService()
+                    requestBatteryOptimizationExemption()
                 }
             }
         }
@@ -176,12 +199,28 @@ class MainActivity : AppCompatActivity() {
 
     private fun requestBatteryOptimizationExemption() {
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
-        if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
-            val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+        if (
+            !powerManager.isIgnoringBatteryOptimizations(packageName) &&
+            !batterySettingsInFlight &&
+            !TrackerPrefs.hasShownBackgroundPrompt(this)
+        ) {
+            batterySettingsInFlight = true
+            TrackerPrefs.markBackgroundPromptShown(this)
+            val requestIntent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
                 data = Uri.parse("package:$packageName")
             }
-            settingsLauncher.launch(intent)
+            val fallbackIntent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+            val launchIntent = when {
+                requestIntent.resolveActivity(packageManager) != null -> requestIntent
+                else -> fallbackIntent
+            }
+            settingsLauncher.launch(launchIntent)
         }
+    }
+
+    private fun hasBatteryOptimizationExemption(): Boolean {
+        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+        return powerManager.isIgnoringBatteryOptimizations(packageName)
     }
 
     private fun hasForegroundLocationPermission(): Boolean {

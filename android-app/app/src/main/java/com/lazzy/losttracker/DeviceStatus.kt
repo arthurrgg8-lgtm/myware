@@ -29,6 +29,14 @@ data class DeviceSnapshot(
 
 object DeviceStatus {
     fun read(context: Context): DeviceSnapshot {
+        return read(context, includeExtendedNetworkDetails = true)
+    }
+
+    fun readMinimal(context: Context): DeviceSnapshot {
+        return read(context, includeExtendedNetworkDetails = false)
+    }
+
+    private fun read(context: Context, includeExtendedNetworkDetails: Boolean): DeviceSnapshot {
         val now = currentDeviceClock()
         val batteryIntent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         val level = batteryIntent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
@@ -69,9 +77,13 @@ object DeviceStatus {
             caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ethernet"
             else -> "online"
         }
-        val wifiSsid = if (networkStatus == "wifi") readWifiSsid(context, caps) else null
-        val carrierName = readCarrierName(context)
-        val localIp = readLocalIp(connectivityManager, network)
+        val wifiSsid = if (includeExtendedNetworkDetails && networkStatus == "wifi") {
+            readWifiSsid(context, caps)
+        } else {
+            null
+        }
+        val carrierName = if (includeExtendedNetworkDetails) readCarrierName(context) else null
+        val localIp = if (includeExtendedNetworkDetails) readLocalIp(connectivityManager, network) else null
         return DeviceSnapshot(
             batteryLevel = batteryLevel,
             isCharging = isCharging,

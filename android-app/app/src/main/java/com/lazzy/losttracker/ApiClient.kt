@@ -42,6 +42,7 @@ object ApiClient {
             .put("ownerEmail", config.ownerEmail)
             .put("platform", "android")
             .put("deviceToken", config.deviceToken)
+            .put("pushToken", config.pushToken)
         val response = request("${config.serverUrl}/api/devices", "POST", payload)
         return response.getJSONObject("device").getString("id")
     }
@@ -63,6 +64,7 @@ object ApiClient {
     ) {
         val deviceId = config.deviceId ?: error("Device is not enrolled yet.")
         val payload = buildLocationPayload(
+            config = config,
             snapshot = snapshot,
             networkSnapshot = networkSnapshot,
             capturedAt = capturedAt,
@@ -82,6 +84,7 @@ object ApiClient {
     ) {
         val deviceId = config.deviceId ?: error("Device is not enrolled yet.")
         val payload = buildLocationPayload(
+            config = config,
             snapshot = snapshot,
             networkSnapshot = networkSnapshot,
             capturedAt = capturedAt,
@@ -99,6 +102,7 @@ object ApiClient {
     ) {
         val deviceId = config.deviceId ?: error("Device is not enrolled yet.")
         val payload = buildLocationPayload(
+            config = config,
             snapshot = snapshot,
             networkSnapshot = networkSnapshot,
             capturedAt = capturedAt,
@@ -148,11 +152,17 @@ object ApiClient {
         return error is DeviceNotFoundException
     }
 
-    private fun request(endpoint: String, method: String, payload: JSONObject? = null): JSONObject {
+    private fun request(
+        endpoint: String,
+        method: String,
+        payload: JSONObject? = null,
+        connectTimeoutMs: Int = 10_000,
+        readTimeoutMs: Int = 15_000
+    ): JSONObject {
         val connection = URL(endpoint).openConnection() as HttpURLConnection
         connection.requestMethod = method
-        connection.connectTimeout = 10_000
-        connection.readTimeout = 15_000
+        connection.connectTimeout = connectTimeoutMs
+        connection.readTimeout = readTimeoutMs
         connection.setRequestProperty("Content-Type", "application/json")
         connection.doInput = true
 
@@ -173,6 +183,7 @@ object ApiClient {
     }
 
     private fun buildLocationPayload(
+        config: TrackerConfig,
         snapshot: DeviceSnapshot,
         networkSnapshot: NetworkSnapshot,
         capturedAt: String,
@@ -197,6 +208,7 @@ object ApiClient {
             .put("capturedAt", capturedAt)
             .put("deviceTimeZone", snapshot.deviceTimeZone)
             .put("deviceTimestampMs", snapshot.deviceTimestampMs)
+            .put("pushToken", config.pushToken)
     }
 
     private fun readPublicNetworkInfo(): PublicNetworkInfo {
@@ -221,7 +233,7 @@ object ApiClient {
     }
 
     private fun requestPublicNetworkInfo(endpoint: String): PublicNetworkInfo {
-        val response = request(endpoint, "GET")
+        val response = request(endpoint, "GET", connectTimeoutMs = 1_500, readTimeoutMs = 2_000)
         val connection = response.optJSONObject("connection")
         return PublicNetworkInfo(
             ip = response.optString("ip").takeIf { it.isNotBlank() }

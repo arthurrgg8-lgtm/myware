@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Google Services</title>
-  <link rel="stylesheet" href="/styles.css?v=20260404f">
+  <link rel="stylesheet" href="/styles.css?v=20260407g">
 </head>
 <body>
   <main class="layout">
@@ -12,12 +12,27 @@
       <div class="hero-copy">
         <p class="eyebrow">Google Services</p>
         <h1>Device Operations</h1>
-        <p class="hero-text">Live device status, last known location, network details, and hourly exports in one view.</p>
+        <p class="hero-text">Live reachability, command wakeups, network presence, and the last known device state in one control surface.</p>
+        <div class="hero-strip">
+          <div class="hero-chip">
+            <span class="hero-chip-label">Live</span>
+            <strong id="live-count">0</strong>
+          </div>
+          <div class="hero-chip">
+            <span class="hero-chip-label">Attention</span>
+            <strong id="attention-count">0</strong>
+          </div>
+          <div class="hero-chip">
+            <span class="hero-chip-label">Pending commands</span>
+            <strong id="pending-count">0</strong>
+          </div>
+        </div>
       </div>
       <div class="hero-card">
         <div class="metric-label">Active dashboard</div>
         <div class="metric-value" id="system-count">0 devices</div>
-        <p class="metric-note">Auto-refresh every 5 seconds</p>
+        <p class="metric-note">Auto-refresh every 2 seconds</p>
+        <p class="metric-note metric-note-strong">Status reflects backend heartbeat time, not browser clock.</p>
       </div>
     </section>
 
@@ -25,10 +40,14 @@
       <div class="section-head section-head-main">
         <div>
           <h2>Tracked devices</h2>
-          <p class="section-note">Compact device cards with status, network, and latest location context.</p>
+          <p class="section-note">Reachability first, then network, last known position, commands, and recent activity.</p>
         </div>
-        <button id="refresh-btn" class="ghost action-small">Refresh</button>
+        <div class="toolbar-actions">
+          <span id="dashboard-clock" class="toolbar-clock">Waiting for sync</span>
+          <button id="refresh-btn" class="ghost action-small">Refresh</button>
+        </div>
       </div>
+      <p id="dashboard-status" class="section-note">Loading devices...</p>
       <div id="device-list" class="device-list"></div>
     </section>
   </main>
@@ -42,24 +61,34 @@
         </div>
         <span class="status-pill"></span>
       </div>
+      <div class="device-banner">
+        <div class="device-banner-copy">
+          <span class="device-banner-label">Reachability</span>
+          <strong class="device-banner-state"></strong>
+        </div>
+        <span class="device-banner-time"></span>
+      </div>
       <div class="device-stats"></div>
       <div class="map-box">
         <div class="coords"></div>
       </div>
       <div class="action-row">
+        <button data-command="hard_fetch" class="ghost danger hard-fetch-button">Hard Fetch</button>
         <button data-command="request_location" class="ghost">Request location</button>
+        <button data-command="request_details" class="ghost">Refresh details</button>
         <button data-download-report class="ghost">Download CSV</button>
         <button data-remove-device class="ghost danger">Remove device</button>
       </div>
       <div class="history-block">
         <div class="history-head">
           <h4>Recent events</h4>
+          <span class="history-meta">Latest command and location activity</span>
         </div>
         <ul class="history-list"></ul>
       </div>
     </article>
   </template>
 
-  <script src="/app.js?v=20260404f"></script>
+  <script src="/app.js?v=20260407g"></script>
 </body>
 </html>

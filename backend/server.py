@@ -5,11 +5,16 @@ import json
 import os
 import random
 import sqlite3
+import time
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.error import HTTPError, URLError
+from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.request import Request, urlopen
+
+import jwt
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -18,10 +23,118 @@ DATA_DIR = BASE_DIR / "data"
 DB_PATH = DATA_DIR / "tracker.db"
 HOST = os.environ.get("HOST", "127.0.0.1")
 PORT = int(os.environ.get("PORT", "8080"))
+DEFAULT_FCM_SERVICE_ACCOUNT_PATH = "/home/lazzy/Desktop/myware-1f5c4-firebase-adminsdk-fbsvc-e1ebd93477.json"
+FCM_SCOPE = "https://www.googleapis.com/auth/firebase.messaging"
+_FCM_ACCESS_TOKEN = None
+_FCM_ACCESS_TOKEN_EXPIRES_AT = 0
 
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def get_fcm_access_token() -> tuple[str | None, str | None, str | None]:
+    global _FCM_ACCESS_TOKEN, _FCM_ACCESS_TOKEN_EXPIRES_AT
+
+    service_account_path = (os.environ.get("FCM_SERVICE_ACCOUNT_JSON") or DEFAULT_FCM_SERVICE_ACCOUNT_PATH).strip()
+    if not service_account_path:
+        return None, None, "FCM service account path is not configured."
+
+    path = Path(service_account_path)
+    if not path.exists():
+        return None, None, f"FCM service account file not found: {service_account_path}"
+
+    now_ts = int(time.time())
+    if _FCM_ACCESS_TOKEN and now_ts < _FCM_ACCESS_TOKEN_EXPIRES_AT - 60:
+        project_id = json.loads(path.read_text()).get("project_id")
+        return _FCM_ACCESS_TOKEN, project_id, None
+
+    info = json.loads(path.read_text())
+    project_id = info.get("project_id")
+    client_email = info.get("client_email")
+    private_key = info.get("private_key")
+    token_uri = info.get("token_uri") or "https://oauth2.googleapis.com/token"
+    if not project_id or not client_email or not private_key:
+        return None, None, "FCM service account file is missing required fields."
+
+    issued_at = int(time.time())
+    assertion = jwt.encode(
+        {
+            "iss": client_email,
+            "scope": FCM_SCOPE,
+            "aud": token_uri,
+            "iat": issued_at,
+            "exp": issued_at + 3600,
+        },
+        private_key,
+        algorithm="RS256",
+    )
+    form_body = urlencode(
+        {
+            "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+            "assertion": assertion,
+        }
+    ).encode("utf-8")
+    request = Request(
+        token_uri,
+        data=form_body,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=10) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except HTTPError as error:
+        return None, None, error.read().decode("utf-8", errors="replace") or str(error)
+    except URLError as error:
+        return None, None, str(error)
+
+    access_token = payload.get("access_token")
+    expires_in = int(payload.get("expires_in") or 3600)
+    if not access_token:
+        return None, None, "OAuth token response did not include access_token."
+
+    _FCM_ACCESS_TOKEN = access_token
+    _FCM_ACCESS_TOKEN_EXPIRES_AT = issued_at + expires_in
+    return access_token, project_id, None
+
+
+def send_fcm_wakeup(push_token: str, device_id: str, command_type: str) -> tuple[bool, str | None]:
+    if not push_token:
+        return False, None
+    access_token, project_id, auth_error = get_fcm_access_token()
+    if not access_token or not project_id:
+        return False, auth_error
+    payload = {
+        "message": {
+            "token": push_token,
+            "data": {
+                "kind": "command_wakeup",
+                "deviceId": device_id,
+                "commandType": command_type,
+            },
+            "android": {
+                "priority": "high",
+            },
+        }
+    }
+    request = Request(
+        f"https://fcm.googleapis.com/v1/projects/{project_id}/messages:send",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json; charset=utf-8",
+            "Authorization": f"Bearer {access_token}",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=10) as response:
+            body = response.read().decode("utf-8", errors="replace")
+        return True, body
+    except HTTPError as error:
+        return False, error.read().decode("utf-8", errors="replace") or str(error)
+    except URLError as error:
+        return False, str(error)
 
 
 def prefer_value(incoming, existing):
@@ -51,6 +164,7 @@ def init_db() -> None:
                 owner_email TEXT NOT NULL,
                 platform TEXT NOT NULL,
                 device_token TEXT UNIQUE,
+                push_token TEXT,
                 status TEXT NOT NULL DEFAULT 'active',
                 battery_level INTEGER NOT NULL DEFAULT 100,
                 is_charging INTEGER NOT NULL DEFAULT 0,
@@ -190,6 +304,9 @@ def ensure_device_token_column(conn: sqlite3.Connection) -> None:
     if "device_token" not in columns:
         conn.execute("ALTER TABLE devices ADD COLUMN device_token TEXT")
         conn.commit()
+    if "push_token" not in columns:
+        conn.execute("ALTER TABLE devices ADD COLUMN push_token TEXT")
+        conn.commit()
     if "location_services_enabled" not in columns:
         conn.execute("ALTER TABLE devices ADD COLUMN location_services_enabled INTEGER NOT NULL DEFAULT 1")
         conn.commit()
@@ -318,7 +435,7 @@ class TrackerHandler(BaseHTTPRequestHandler):
                 for row, device in zip(rows, devices):
                     device["history"] = self.fetch_history(conn, row["id"])
                     device["actions"] = self.fetch_actions(conn, row["id"])
-            json_response(self, {"devices": devices})
+            json_response(self, {"devices": devices, "serverTime": now_iso()})
         finally:
             conn.close()
 
@@ -365,6 +482,7 @@ class TrackerHandler(BaseHTTPRequestHandler):
         owner_email = (payload.get("ownerEmail") or "").strip()
         platform = (payload.get("platform") or "android").strip().lower()
         device_token = (payload.get("deviceToken") or "").strip() or None
+        push_token = (payload.get("pushToken") or "").strip() or None
         if not name or not owner_email:
             return json_response(self, {"error": "name and ownerEmail are required"}, status=400)
 
@@ -384,10 +502,10 @@ class TrackerHandler(BaseHTTPRequestHandler):
                 conn.execute(
                     """
                     UPDATE devices
-                    SET name = ?, owner_email = ?, platform = ?, updated_at = ?, last_seen_at = ?
+                    SET name = ?, owner_email = ?, platform = ?, push_token = ?, updated_at = ?, last_seen_at = ?
                     WHERE id = ?
                     """,
-                    (name, owner_email, platform, timestamp, timestamp, device_pk),
+                    (name, owner_email, platform, push_token, timestamp, timestamp, device_pk),
                 )
                 conn.execute(
                     """
@@ -402,9 +520,10 @@ class TrackerHandler(BaseHTTPRequestHandler):
                     """
                     INSERT INTO devices (
                         device_code, name, owner_email, platform, device_token, created_at, updated_at, last_seen_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        , push_token
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (device_code, name, owner_email, platform, device_token, timestamp, timestamp, timestamp),
+                    (device_code, name, owner_email, platform, device_token, timestamp, timestamp, timestamp, push_token),
                 )
                 device_pk = cursor.lastrowid
                 conn.execute(
@@ -529,6 +648,7 @@ class TrackerHandler(BaseHTTPRequestHandler):
         local_ip = (payload.get("localIp") or "").strip() or None
         public_ip = (payload.get("publicIp") or "").strip() or None
         isp_name = (payload.get("ispName") or "").strip() or None
+        push_token = (payload.get("pushToken") or "").strip() or None
         device_time_zone = (payload.get("deviceTimeZone") or "").strip() or None
         device_timestamp_ms = payload.get("deviceTimestampMs")
         location_services_enabled = 0 if payload.get("locationServicesEnabled") is False else 1
@@ -552,6 +672,7 @@ class TrackerHandler(BaseHTTPRequestHandler):
             local_ip = prefer_value(local_ip, existing["local_ip"])
             public_ip = prefer_value(public_ip, existing["public_ip"])
             isp_name = prefer_value(isp_name, existing["isp_name"])
+            push_token = prefer_value(push_token, existing["push_token"])
             device_time_zone = prefer_value(device_time_zone, existing["device_time_zone"])
             if device_timestamp_ms in (None, ""):
                 device_timestamp_ms = existing["device_timestamp_ms"]
@@ -580,7 +701,7 @@ class TrackerHandler(BaseHTTPRequestHandler):
                     """
                     UPDATE devices
                     SET battery_level = ?, is_charging = ?, network_status = ?, wifi_ssid = ?, carrier_name = ?, local_ip = ?, public_ip = ?, isp_name = ?, location_services_enabled = ?,
-                        device_time_zone = ?, device_timestamp_ms = ?, last_latitude = ?, last_longitude = ?, last_seen_at = ?, updated_at = ?
+                        push_token = ?, device_time_zone = ?, device_timestamp_ms = ?, last_latitude = ?, last_longitude = ?, last_seen_at = ?, updated_at = ?
                     WHERE id = ?
                     """,
                     (
@@ -593,6 +714,7 @@ class TrackerHandler(BaseHTTPRequestHandler):
                         public_ip,
                         isp_name,
                         location_services_enabled,
+                        push_token,
                         device_time_zone,
                         device_timestamp_ms,
                         latitude,
@@ -607,7 +729,7 @@ class TrackerHandler(BaseHTTPRequestHandler):
                     """
                     UPDATE devices
                     SET battery_level = ?, is_charging = ?, network_status = ?, wifi_ssid = ?, carrier_name = ?, local_ip = ?, public_ip = ?, isp_name = ?, location_services_enabled = ?,
-                        device_time_zone = ?, device_timestamp_ms = ?, last_seen_at = ?, updated_at = ?
+                        push_token = ?, device_time_zone = ?, device_timestamp_ms = ?, last_seen_at = ?, updated_at = ?
                     WHERE id = ?
                     """,
                     (
@@ -620,6 +742,7 @@ class TrackerHandler(BaseHTTPRequestHandler):
                         public_ip,
                         isp_name,
                         location_services_enabled,
+                        push_token,
                         device_time_zone,
                         device_timestamp_ms,
                         received_at,
@@ -682,7 +805,7 @@ class TrackerHandler(BaseHTTPRequestHandler):
     def create_command(self, device_id: str) -> None:
         payload = parse_json(self)
         command_type = (payload.get("commandType") or "").strip().lower()
-        allowed = {"request_location"}
+        allowed = {"request_location", "request_details", "hard_fetch"}
         if command_type not in allowed:
             return json_response(self, {"error": f"commandType must be one of {sorted(allowed)}"}, status=400)
 
@@ -701,15 +824,41 @@ class TrackerHandler(BaseHTTPRequestHandler):
                 """,
                 (device_pk, command_type, json.dumps(payload.get("payload") or {}), timestamp),
             )
+            action_notes = {
+                "request_location": "Dashboard requested a location refresh.",
+                "request_details": "Dashboard requested a fresh device details update.",
+                "hard_fetch": "Dashboard requested a hard fetch with immediate status and location refresh.",
+            }
             conn.execute(
                 """
                 INSERT INTO device_actions (device_id, action_type, notes, created_at)
                 VALUES (?, ?, ?, ?)
                 """,
-                (device_pk, "request_location", "Dashboard requested a fresh location update.", timestamp),
+                (device_pk, command_type, action_notes[command_type], timestamp),
             )
             conn.commit()
-            json_response(self, {"ok": True, "commandId": cursor.lastrowid, "createdAt": timestamp}, status=201)
+            push_attempted = False
+            push_delivered = False
+            push_error = None
+            if row["push_token"]:
+                push_attempted = True
+                push_delivered, push_error = send_fcm_wakeup(
+                    row["push_token"],
+                    row["device_code"],
+                    command_type,
+                )
+            json_response(
+                self,
+                {
+                    "ok": True,
+                    "commandId": cursor.lastrowid,
+                    "createdAt": timestamp,
+                    "pushWakeAttempted": push_attempted,
+                    "pushWakeDelivered": push_delivered,
+                    "pushWakeError": push_error,
+                },
+                status=201,
+            )
         finally:
             conn.close()
 
@@ -728,6 +877,8 @@ class TrackerHandler(BaseHTTPRequestHandler):
             ).fetchone()
             if not command:
                 return json_response(self, {"error": "command not found"}, status=404)
+            if command["status"] == "completed":
+                return json_response(self, {"ok": True, "completedAt": timestamp, "alreadyCompleted": True})
 
             conn.execute(
                 "UPDATE device_commands SET status = 'completed', completed_at = ? WHERE id = ?",

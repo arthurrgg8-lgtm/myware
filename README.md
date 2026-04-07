@@ -1,18 +1,21 @@
 # Google Services
 
-Google Services is a two-part project:
+Google Services is a PC-hosted device tracking stack with three working parts:
 
-- an Android app that enrolls a device and reports status and location data
-- a lightweight Python backend that stores device state and serves a browser dashboard
+- an Android app that enrolls once and keeps reporting lightweight reachability and requested device data
+- a Python backend that stores device state in SQLite and serves the dashboard
+- a browser dashboard on the PC, with public phone access routed through `app.anuditk.com.np`
 
-This repository is intended to be understandable and runnable by a new human or AI agent without prior chat context.
+This repository is meant to be understandable and runnable without prior chat context.
 
 ## Repository Layout
 
 - `android-app/`: Android client source and Gradle build files
 - `backend/`: Python HTTP server, dashboard assets, and SQLite runtime data
 - `launch-google-services.sh`: convenience backend launcher on port `8091`
-- `Google Services Server.desktop`: desktop launcher for the backend
+- `launch-cloudflare-tunnel.sh`: Cloudflare Tunnel launcher for `app.anuditk.com.np`
+- `launch-google-services-stack.sh`: combined launcher for backend, tunnel, and dashboard
+- `Google Services Server.desktop`: desktop launcher for the combined stack
 
 ## What The System Does
 
@@ -23,15 +26,19 @@ The Android app:
 - auto-enrolls after required Android permissions exist
 - auto-starts tracking after setup
 - stores a stable local device token
+- stores an FCM push token for wake support
 - exposes a public 16-digit device ID to the dashboard
 - keeps a required foreground service notification, but leaves it static and silent
-- checks dashboard commands every 2 seconds
-- fetches a fresh location only when the dashboard sends `Request location`
+- sends a lightweight heartbeat for `live` / `attention`
+- checks dashboard commands every 2 seconds as a baseline
+- can also wake on FCM when the backend creates a command
+- fetches a fresh location only when the dashboard sends `Request location` or `Hard Fetch`
 - sends battery, network, Wi-Fi SSID, IP, ISP, and location data when the handset exposes those values
-- pushes status-only changes such as Wi-Fi, carrier, IP, network state, and location-enabled state without doing routine live location fetches
+- keeps routine reachability separate from command-triggered location/detail work
 - records hourly report entries locally and syncs them later when the backend becomes reachable again
 - records hourly failure states too, such as `location disabled`, `no GPS/network fix`, or `permission missing`
 - automatically re-enrolls if the device is deleted from the dashboard while the APK is still installed
+- asks the background-run prompt only after setup and only once from the app side
 
 ### Backend dashboard
 
@@ -39,8 +46,12 @@ The backend:
 
 - stores device state in SQLite
 - serves the dashboard at `http://127.0.0.1:8091/`
-- shows compact per-device cards
+- publishes the same backend publicly through Cloudflare Tunnel at `https://app.anuditk.com.np`
+- shows live/attention state from recent real backend contact
 - supports `Request location`
+- supports `Refresh details`
+- supports `Hard Fetch`
+- sends FCM wake messages when commands are created
 - supports removing a device from the backend
 - supports per-device hourly CSV export
 
@@ -49,32 +60,63 @@ The backend:
 ### Backend
 
 - Python 3
-- no external Python packages are required for the current server
+- `cloudflared` for the public route
+- no extra Python package install is required in the current environment
 
 ### Android build
 
 - JDK compatible with the Gradle project
 - Android SDK
 - `adb` if you want direct install or debugging on a connected phone
+- `google-services.json` for Firebase-enabled builds
 
 ## Run The Backend
 
 ### Recommended
 
 ```bash
-bash /home/lazzy/Desktop/myware/launch-google-services.sh
+bash /home/lazzy/Desktop/myware/launch-google-services-stack.sh
 ```
 
-### Manual
+This combined launcher:
+
+- starts the backend on `127.0.0.1:8091`
+- waits for `GET /api/health` to succeed locally
+- starts the Cloudflare Tunnel for the public APK URL
+- opens the local dashboard on this PC
+- stops both processes together when you close the terminal
+
+It expects `CLOUDFLARED_TOKEN` either in the environment or in:
+
+`~/.config/google-services/cloudflare.env`
+
+Example file contents:
+
+```bash
+CLOUDFLARED_TOKEN='YOUR_TUNNEL_TOKEN'
+```
+
+### Backend Only
 
 ```bash
 cd /home/lazzy/Desktop/myware/backend
-HOST=0.0.0.0 PORT=8091 python3 server.py
+HOST=127.0.0.1 PORT=8091 python3 server.py
 ```
 
 Dashboard URL:
 
 `http://127.0.0.1:8091/`
+
+For domain-backed deployment, run the backend locally on `127.0.0.1:8091` and publish it through your permanent Cloudflare Tunnel for:
+
+`https://app.anuditk.com.np`
+
+Example:
+
+```bash
+cd /home/lazzy/Desktop/myware
+CLOUDFLARED_TOKEN='YOUR_TUNNEL_TOKEN' bash ./launch-cloudflare-tunnel.sh
+```
 
 ## Build The APK
 
@@ -87,14 +129,16 @@ Build output:
 
 `/home/lazzy/Desktop/myware/android-app/app/build/outputs/apk/debug/app-debug.apk`
 
-Desktop convenience copy used in this workspace:
+For FCM-enabled builds, place:
 
-`/home/lazzy/Desktop/Google Services-debug.apk`
+`/home/lazzy/Desktop/myware/android-app/app/google-services.json`
+
+before building.
 
 ## Install The APK With adb
 
 ```bash
-/home/lazzy/Android/Sdk/platform-tools/adb install -r '/home/lazzy/Desktop/Google Services-debug.apk'
+/home/lazzy/Android/Sdk/platform-tools/adb install -r '/home/lazzy/Desktop/myware/android-app/app/build/outputs/apk/debug/app-debug.apk'
 ```
 
 Check the connected device list:
@@ -105,20 +149,24 @@ Check the connected device list:
 
 ## Connectivity Model
 
+Current default backend URL in the Android app:
+
+`https://app.anuditk.com.np`
+
 ### Live updates
 
-For live reporting and fast dashboard commands, the phone must have a route to the backend through one of these:
+For live reporting and dashboard commands, the phone must have a real path to the backend. In the current final setup that path is:
 
-- same LAN as the server
-- a public tunnel or hosted backend URL
-- USB with `adb reverse` during local testing
+- phone -> `https://app.anuditk.com.np` -> Cloudflare Tunnel -> local backend on the PC
 
 ### Command and hourly behavior
 
-- The service polls the backend every 2 seconds for pending commands.
-- `Request location` triggers an immediate fresh location fetch from the phone.
-- Routine location is not fetched continuously anymore.
-- Device detail changes such as Wi-Fi, carrier, local IP, network type, and location-enabled state are pushed quickly when they change.
+- The service keeps heartbeat/reachability separate from heavy work.
+- `live` / `attention` should mean recent real backend contact only.
+- `Request location` triggers a fresh location fetch only.
+- `Refresh details` triggers a detail/status refresh only.
+- `Hard Fetch` tries a more aggressive wakeful status + location path.
+- The backend now also sends an FCM wake message when a command is created.
 - The phone still records one hourly report row for CSV export, even when the backend is offline.
 - Queued hourly rows upload when the backend becomes reachable again.
 
@@ -135,13 +183,12 @@ If the backend is stopped:
 
 ## Dashboard Status Meaning
 
-The dashboard marks a device as stale when fresh updates have not arrived recently.
+The dashboard uses a simple rule:
 
-Important distinction:
+- recent real backend contact from the phone: `live`
+- no recent real backend contact: `attention`
 
-- `Location disabled on device`: the phone reported that system Location is off
-- `Network is not connected on device`: the last reported network state was offline and updates are stale
-- `No recent updates received from device`: Location may still be enabled, but the backend has not received fresh updates recently enough
+Command clicks do not count as proof of connectivity by themselves.
 
 ## CSV Export
 
@@ -158,6 +205,8 @@ The CSV may include:
 
 - A normal Android app cannot silently turn the phone master Location toggle back on after the user disables it.
 - Some values such as carrier name, SSID, public IP, and ISP depend on Android version, OEM behavior, permissions, and network conditions.
+- Even with heartbeat and FCM wake, some Android devices can still defer background work in deeper idle states.
+- FCM wake improves command pickup, but it does not guarantee perfect autonomous heartbeat on every OEM build.
 - If the phone has no communication path to the backend at all, it cannot send live updates until a path returns.
 - Android still requires the foreground service notification icon while the background service is running; the app keeps that notification as quiet and static as possible.
 
@@ -169,6 +218,8 @@ The CSV may include:
 - dashboard CSS: `backend/static/styles.css`
 - Android main activity: `android-app/app/src/main/java/com/lazzy/losttracker/MainActivity.kt`
 - Android tracker service: `android-app/app/src/main/java/com/lazzy/losttracker/TrackerService.kt`
+- Android restart receiver: `android-app/app/src/main/java/com/lazzy/losttracker/ServiceRestartReceiver.kt`
+- Android FCM service: `android-app/app/src/main/java/com/lazzy/losttracker/TrackerFirebaseMessagingService.kt`
 - Android API client: `android-app/app/src/main/java/com/lazzy/losttracker/ApiClient.kt`
 - Android prefs: `android-app/app/src/main/java/com/lazzy/losttracker/TrackerPrefs.kt`
 - Android device status collector: `android-app/app/src/main/java/com/lazzy/losttracker/DeviceStatus.kt`
@@ -179,4 +230,6 @@ The CSV may include:
 - `backend/data/` is intentionally git-ignored because it contains machine-local runtime state.
 - `android-app/local.properties` is intentionally git-ignored because it is machine-specific.
 - The GitHub repo contains code and docs, not the live SQLite database from this machine.
-- If you move the project folder again, update the absolute paths in `launch-google-services.sh` and `Google Services Server.desktop`.
+- The Cloudflare token is intentionally not stored in the repo; keep it in the environment or `~/.config/google-services/cloudflare.env`.
+- The Firebase Admin service-account JSON is used locally by the backend and does not need to be committed into this repo.
+- If you move the project folder again, update the absolute paths in the launchers and desktop file.

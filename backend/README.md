@@ -12,12 +12,44 @@ This folder contains the Python backend for Google Services.
 
 ```bash
 cd /home/lazzy/Desktop/myware/backend
-HOST=0.0.0.0 PORT=8091 python3 server.py
+HOST=127.0.0.1 PORT=8091 python3 server.py
 ```
 
 Open:
 
 `http://127.0.0.1:8091/`
+
+## Domain Deployment
+
+Current intended public domain:
+
+`https://app.anuditk.com.np`
+
+Recommended production shape:
+
+- run `server.py` on `127.0.0.1:8091`
+- run `cloudflared` locally and publish that backend through the permanent tunnel
+- point `app.anuditk.com.np` at the Cloudflare Tunnel route
+
+Local backend:
+
+```bash
+cd /home/lazzy/Desktop/myware/backend
+HOST=127.0.0.1 PORT=8091 python3 server.py
+```
+
+Cloudflare Tunnel:
+
+```bash
+cd /home/lazzy/Desktop/myware
+CLOUDFLARED_TOKEN='YOUR_TUNNEL_TOKEN' bash ./launch-cloudflare-tunnel.sh
+```
+
+The helper script:
+
+`launch-cloudflare-tunnel.sh`
+
+publishes `http://127.0.0.1:8091` through `cloudflared tunnel --url ... --token ...`.
 
 ## API Overview
 

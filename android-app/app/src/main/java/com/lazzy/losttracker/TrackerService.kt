@@ -1,13 +1,19 @@
 package com.lazzy.losttracker
 
 import android.Manifest
+import android.app.AlarmManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.wifi.WifiManager
 import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
 import android.location.Location
 import android.location.LocationManager
 import android.os.Build
@@ -15,23 +21,56 @@ import android.os.CancellationSignal
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.SystemClock
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import java.util.Collections
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 class TrackerService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private val ioExecutor: ExecutorService = Executors.newSingleThreadExecutor()
-    private val pollIntervalMs = 2_000L
+    private val commandExecutor: ExecutorService = Executors.newSingleThreadExecutor()
+    private val heartbeatExecutor: ExecutorService = Executors.newSingleThreadExecutor()
+    private val pollIntervalMs = 500L
+    private val heartbeatIntervalMs = 5_000L
+    private val watchdogIntervalMs = 10_000L
+    private val inFlightCommandIds = Collections.synchronizedSet(mutableSetOf<Int>())
     @Volatile
     private var lastNotificationContent: String? = null
     @Volatile
     private var reEnrollmentInProgress = false
+    @Volatile
+    private var lastHeartbeatSentAtMs = 0L
+    @Volatile
+    private var lastObservedNetworkStatus: String? = null
+    @Volatile
+    private var restartScheduled = false
+    @Volatile
+    private var serviceWakeLock: PowerManager.WakeLock? = null
+    @Volatile
+    private var wifiLock: WifiManager.WifiLock? = null
+
+    private val connectivityManager by lazy {
+        getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+    }
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            lastHeartbeatSentAtMs = 0L
+            handler.post {
+                scheduleWatchdog()
+                syncWithServer()
+            }
+        }
+    }
 
     private val tick = object : Runnable {
         override fun run() {
             syncWithServer()
+            scheduleWatchdog()
             handler.postDelayed(this, pollIntervalMs)
         }
     }
@@ -39,21 +78,52 @@ class TrackerService : Service() {
     override fun onCreate() {
         super.onCreate()
         createChannel()
+        acquireServiceWakeLock()
+        acquireWifiLock()
+        runCatching {
+            connectivityManager.registerDefaultNetworkCallback(networkCallback)
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        restartScheduled = false
         val content = getString(R.string.notification_body)
         lastNotificationContent = content
-        startForeground(NOTIFICATION_ID, buildNotification(content))
+        ServiceCompat.startForeground(
+            this,
+            NOTIFICATION_ID,
+            buildNotification(content),
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+        )
         handler.removeCallbacks(tick)
+        scheduleWatchdog()
+        if (intent?.action == ACTION_SYNC_NOW) {
+            lastHeartbeatSentAtMs = 0L
+            handler.post { syncWithServer() }
+        }
         handler.post(tick)
         return START_STICKY
     }
 
     override fun onDestroy() {
         handler.removeCallbacks(tick)
+        commandExecutor.shutdown()
+        heartbeatExecutor.shutdown()
         ioExecutor.shutdown()
+        runCatching {
+            connectivityManager.unregisterNetworkCallback(networkCallback)
+        }
+        serviceWakeLock?.releaseSafe()
+        serviceWakeLock = null
+        wifiLock?.releaseSafe()
+        wifiLock = null
+        scheduleSelfRestart()
         super.onDestroy()
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        scheduleSelfRestart()
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -64,8 +134,8 @@ class TrackerService : Service() {
             stopSelf()
             return
         }
-        flushQueuedReportsAsync(config)
-        val snapshot = DeviceStatus.read(this)
+        pollCommands(config)
+        val snapshot = DeviceStatus.readMinimal(this)
         val routineCapturedAt = snapshot.deviceTime
         syncStatusIfChanged(config, snapshot, routineCapturedAt)
         if (!hasLocationPermission()) {
@@ -76,7 +146,6 @@ class TrackerService : Service() {
                 }
             }
             if (snapshot.networkStatus != "offline") {
-                pollCommands(config)
             }
             updateNotification("Location permission missing. Waiting for dashboard requests or hourly sync.")
             return
@@ -88,16 +157,26 @@ class TrackerService : Service() {
             updateNotification("Device is offline. Hourly state will sync when connection returns.")
             return
         }
-        pollCommands(config)
     }
 
     private fun pollCommands(config: TrackerConfig) {
-        ioExecutor.execute {
+        commandExecutor.execute {
             runCatching { ApiClient.fetchCommands(config) }
                 .onSuccess { commands ->
-                    commands.filter { it.commandType == "request_location" }.forEach { command ->
+                    commands.filter {
+                        it.commandType == "request_location" ||
+                            it.commandType == "request_details" ||
+                            it.commandType == "hard_fetch"
+                    }.forEach { command ->
+                        if (!inFlightCommandIds.add(command.id)) {
+                            return@forEach
+                        }
                         handler.post {
-                            pushCurrentLocation(config, requestedByServer = true, commandId = command.id)
+                            when (command.commandType) {
+                                "request_location" -> pushCurrentLocation(config, requestedByServer = true, commandId = command.id)
+                                "request_details" -> pushCurrentDetails(config, command.id)
+                                "hard_fetch" -> performHardFetch(config, command.id)
+                            }
                         }
                     }
                 }
@@ -115,26 +194,32 @@ class TrackerService : Service() {
         snapshot: DeviceSnapshot,
         capturedAt: String,
     ) {
+        val previousNetworkStatus = lastObservedNetworkStatus
+        lastObservedNetworkStatus = snapshot.networkStatus
         if (snapshot.networkStatus == "offline") {
+            lastHeartbeatSentAtMs = 0L
             return
         }
-        val locationServicesEnabled = isLocationProviderEnabled()
-        val fingerprint = buildStatusFingerprint(snapshot, locationServicesEnabled)
-        if (loadLastStatusFingerprint() == fingerprint) {
+        val networkRecovered = previousNetworkStatus == "offline" && snapshot.networkStatus != "offline"
+        val shouldSendHeartbeat = SystemClock.elapsedRealtime() - lastHeartbeatSentAtMs >= heartbeatIntervalMs
+        if (!networkRecovered && !shouldSendHeartbeat) {
             return
         }
-        ioExecutor.execute {
-            val networkSnapshot = ApiClient.readNetworkSnapshot()
+        heartbeatExecutor.execute {
+            val networkSnapshot = ApiClient.NetworkSnapshot(null, null)
             runCatching {
                 ApiClient.sendStatusUpdate(
                     config = config,
                     snapshot = snapshot,
-                    locationServicesEnabled = locationServicesEnabled,
+                    locationServicesEnabled = isLocationProviderEnabled(),
                     capturedAt = capturedAt,
                     networkSnapshot = networkSnapshot
                 )
             }.onSuccess {
-                saveLastStatusFingerprint(fingerprint)
+                lastHeartbeatSentAtMs = SystemClock.elapsedRealtime()
+                ioExecutor.execute {
+                    flushHourlyReports(config)
+                }
             }.onFailure { error ->
                 handleMissingDevice(error)
             }
@@ -181,12 +266,19 @@ class TrackerService : Service() {
         config: TrackerConfig,
         requestedByServer: Boolean,
         capturedAt: String = DeviceStatus.currentDeviceTime(),
-        commandId: Int? = null
+        commandId: Int? = null,
+        completionNotes: String = "Fresh location received from device.",
+        wakeLock: PowerManager.WakeLock? = null
     ) {
-        val snapshot = DeviceStatus.read(this)
+        val snapshot = if (requestedByServer) DeviceStatus.readMinimal(this) else DeviceStatus.read(this)
+        val isCommandFetch = commandId != null
         if (!hasLocationPermission()) {
             ioExecutor.execute {
-                val networkSnapshot = ApiClient.readNetworkSnapshot()
+                val networkSnapshot = if (requestedByServer) {
+                    ApiClient.NetworkSnapshot(null, null)
+                } else {
+                    ApiClient.readNetworkSnapshot()
+                }
                 runCatching {
                     ApiClient.sendLocationUnavailable(
                         config = config,
@@ -194,19 +286,30 @@ class TrackerService : Service() {
                         capturedAt = capturedAt,
                         networkSnapshot = networkSnapshot
                     )
-                    queueHourlyUnavailable(config, snapshot, "permission missing", capturedAt)
-                    flushHourlyReports(config)
+                    if (!isCommandFetch) {
+                        queueHourlyUnavailable(config, snapshot, "permission missing", capturedAt)
+                        flushHourlyReports(config)
+                    }
                     if (requestedByServer && commandId != null) {
-                        ApiClient.completeCommand(config, commandId, "Location permission is missing on the device.")
+                        ApiClient.completeCommand(config, commandId, "Location permission missing on device.")
+                    } else if (commandId != null) {
+                        ApiClient.completeCommand(config, commandId, "Hard fetch failed: location permission missing.")
                     }
                 }.onSuccess {
                     updateNotification("Location permission missing on this device.")
                 }.onFailure { error ->
                     if (handleMissingDevice(error)) {
+                        releaseCommand(commandId)
+                        wakeLock?.releaseSafe()
                         return@execute
                     }
-                    queueHourlyUnavailable(config, snapshot, "permission missing", capturedAt)
+                    if (!isCommandFetch) {
+                        queueHourlyUnavailable(config, snapshot, "permission missing", capturedAt)
+                    }
                     updateNotification("Send failed: ${error.message}")
+                }.also {
+                    releaseCommand(commandId)
+                    wakeLock?.releaseSafe()
                 }
             }
             return
@@ -220,7 +323,11 @@ class TrackerService : Service() {
 
         if (provider == null) {
             ioExecutor.execute {
-                val networkSnapshot = ApiClient.readNetworkSnapshot()
+                val networkSnapshot = if (requestedByServer) {
+                    ApiClient.NetworkSnapshot(null, null)
+                } else {
+                    ApiClient.readNetworkSnapshot()
+                }
                 runCatching {
                     ApiClient.sendLocationUnavailable(
                         config = config,
@@ -228,19 +335,30 @@ class TrackerService : Service() {
                         capturedAt = capturedAt,
                         networkSnapshot = networkSnapshot
                     )
-                    queueHourlyUnavailable(config, snapshot, "location disabled", capturedAt)
-                    flushHourlyReports(config)
+                    if (!isCommandFetch) {
+                        queueHourlyUnavailable(config, snapshot, "location disabled", capturedAt)
+                        flushHourlyReports(config)
+                    }
                     if (requestedByServer && commandId != null) {
-                        ApiClient.completeCommand(config, commandId, "Location services are disabled on the device.")
+                        ApiClient.completeCommand(config, commandId, "Location services disabled on device.")
+                    } else if (commandId != null) {
+                        ApiClient.completeCommand(config, commandId, "Hard fetch failed: location services disabled.")
                     }
                 }.onSuccess {
                     updateNotification("Location services are off on this device.")
                 }.onFailure { error ->
                     if (handleMissingDevice(error)) {
+                        releaseCommand(commandId)
+                        wakeLock?.releaseSafe()
                         return@execute
                     }
-                    queueHourlyUnavailable(config, snapshot, "location disabled", capturedAt)
+                    if (!isCommandFetch) {
+                        queueHourlyUnavailable(config, snapshot, "location disabled", capturedAt)
+                    }
                     updateNotification("Send failed: ${error.message}")
+                }.also {
+                    releaseCommand(commandId)
+                    wakeLock?.releaseSafe()
                 }
             }
             return
@@ -249,13 +367,30 @@ class TrackerService : Service() {
         locationManager.getCurrentLocation(provider, CancellationSignal(), mainExecutor) { location: Location? ->
             if (location == null) {
                 ioExecutor.execute {
-                    queueHourlyUnavailable(config, snapshot, "no GPS/network fix", capturedAt)
+                    if (!isCommandFetch) {
+                        queueHourlyUnavailable(config, snapshot, "no GPS/network fix", capturedAt)
+                    }
+                    if (commandId != null) {
+                        runCatching {
+                            ApiClient.completeCommand(
+                                config,
+                                commandId,
+                                if (requestedByServer) "No fresh location fix available." else "Hard fetch failed: no fresh location fix."
+                            )
+                        }
+                    }
                 }
                 updateNotification("Keep protecting, waiting for location")
+                releaseCommand(commandId)
+                wakeLock?.releaseSafe()
                 return@getCurrentLocation
             }
             ioExecutor.execute {
-                val networkSnapshot = ApiClient.readNetworkSnapshot()
+                val networkSnapshot = if (requestedByServer) {
+                    ApiClient.NetworkSnapshot(null, null)
+                } else {
+                    ApiClient.readNetworkSnapshot()
+                }
                 runCatching {
                     ApiClient.sendLocation(
                         config = config,
@@ -264,22 +399,163 @@ class TrackerService : Service() {
                         capturedAt = capturedAt,
                         networkSnapshot = networkSnapshot
                     )
-                    HourlyReportStore.saveLastKnownLocation(this, location.latitude, location.longitude)
-                    queueHourlySuccess(config, snapshot, location, capturedAt)
-                    flushHourlyReports(config)
-                    if (requestedByServer && commandId != null) {
-                        ApiClient.completeCommand(config, commandId, "Fresh location uploaded from phone.")
+                    if (!isCommandFetch) {
+                        HourlyReportStore.saveLastKnownLocation(this, location.latitude, location.longitude)
+                        queueHourlySuccess(config, snapshot, location, capturedAt)
+                        flushHourlyReports(config)
+                    }
+                    if (commandId != null) {
+                        ApiClient.completeCommand(config, commandId, completionNotes)
                     }
                 }.onSuccess {
                     updateNotification(getString(R.string.notification_body))
                 }.onFailure { error ->
                     if (handleMissingDevice(error)) {
+                        releaseCommand(commandId)
+                        wakeLock?.releaseSafe()
                         return@execute
                     }
-                    HourlyReportStore.saveLastKnownLocation(this, location.latitude, location.longitude)
-                    queueHourlySuccess(config, snapshot, location, capturedAt)
-                    updateNotification("Queued hourly location for later sync")
+                    if (!isCommandFetch) {
+                        HourlyReportStore.saveLastKnownLocation(this, location.latitude, location.longitude)
+                        queueHourlySuccess(config, snapshot, location, capturedAt)
+                        updateNotification("Queued hourly location for later sync")
+                    } else {
+                        updateNotification("Location upload failed. Waiting for connection.")
+                    }
+                }.also {
+                    releaseCommand(commandId)
+                    wakeLock?.releaseSafe()
                 }
+            }
+        }
+    }
+
+    private fun pushCurrentDetails(config: TrackerConfig, commandId: Int) {
+        val snapshot = DeviceStatus.read(this)
+        val capturedAt = snapshot.deviceTime
+        ioExecutor.execute {
+            val networkSnapshot = ApiClient.readNetworkSnapshot()
+            runCatching {
+                ApiClient.sendStatusUpdate(
+                    config = config,
+                    snapshot = snapshot,
+                    locationServicesEnabled = isLocationProviderEnabled(),
+                    capturedAt = capturedAt,
+                    networkSnapshot = networkSnapshot
+                )
+                ApiClient.completeCommand(config, commandId, "Fresh device details uploaded from phone.")
+            }.onFailure { error ->
+                if (handleMissingDevice(error)) {
+                    releaseCommand(commandId)
+                    return@execute
+                }
+                updateNotification("Send failed: ${error.message}")
+            }.also {
+                releaseCommand(commandId)
+            }
+        }
+    }
+
+    private fun performHardFetch(config: TrackerConfig, commandId: Int) {
+        scheduleWatchdog()
+        val wakeLock = acquireHardFetchWakeLock()
+        val snapshot = DeviceStatus.read(this)
+        val capturedAt = snapshot.deviceTime
+        ioExecutor.execute {
+            val networkSnapshot = ApiClient.readNetworkSnapshot()
+            runCatching {
+                ApiClient.sendStatusUpdate(
+                    config = config,
+                    snapshot = snapshot,
+                    locationServicesEnabled = isLocationProviderEnabled(),
+                    capturedAt = capturedAt,
+                    networkSnapshot = networkSnapshot
+                )
+            }.onFailure { error ->
+                if (handleMissingDevice(error)) {
+                    releaseCommand(commandId)
+                    wakeLock?.releaseSafe()
+                    return@execute
+                }
+            }
+            handler.post {
+                pushCurrentLocation(
+                    config = config,
+                    requestedByServer = false,
+                    capturedAt = capturedAt,
+                    commandId = commandId,
+                    completionNotes = "Hard fetch completed with aggressive status and location refresh.",
+                    wakeLock = wakeLock
+                )
+            }
+        }
+    }
+
+    private fun releaseCommand(commandId: Int?) {
+        if (commandId != null) {
+            inFlightCommandIds.remove(commandId)
+        }
+    }
+
+    private fun acquireHardFetchWakeLock(): PowerManager.WakeLock? {
+        val powerManager = getSystemService(POWER_SERVICE) as? PowerManager ?: return null
+        return runCatching {
+            powerManager.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "$packageName:hard-fetch"
+            ).apply {
+                setReferenceCounted(false)
+                acquire(2 * 60_000L)
+            }
+        }.getOrNull()
+    }
+
+    private fun acquireServiceWakeLock() {
+        val existing = serviceWakeLock
+        if (existing?.isHeld == true) {
+            return
+        }
+        val powerManager = getSystemService(POWER_SERVICE) as? PowerManager ?: return
+        serviceWakeLock = runCatching {
+            powerManager.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "$packageName:service-heartbeat"
+            ).apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+        }.getOrNull()
+    }
+
+    private fun acquireWifiLock() {
+        val existing = wifiLock
+        if (existing?.isHeld == true) {
+            return
+        }
+        val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return
+        wifiLock = runCatching {
+            wifiManager.createWifiLock(
+                WifiManager.WIFI_MODE_FULL_HIGH_PERF,
+                "$packageName:service-wifi"
+            ).apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+        }.getOrNull()
+    }
+
+    private fun PowerManager.WakeLock.releaseSafe() {
+        runCatching {
+            if (isHeld) {
+                release()
+            }
+        }
+    }
+
+    private fun WifiManager.WifiLock.releaseSafe() {
+        runCatching {
+            if (isHeld) {
+                release()
             }
         }
     }
@@ -288,37 +564,6 @@ class TrackerService : Service() {
         val locationManager = getSystemService(LOCATION_SERVICE) as LocationManager
         return locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER) ||
             locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
-    }
-
-    private fun buildStatusFingerprint(snapshot: DeviceSnapshot, locationServicesEnabled: Boolean): String {
-        return listOf(
-            snapshot.batteryLevel.toString(),
-            snapshot.isCharging.toString(),
-            snapshot.networkStatus,
-            snapshot.wifiSsid.orEmpty(),
-            snapshot.carrierName.orEmpty(),
-            snapshot.localIp.orEmpty(),
-            snapshot.deviceTimeZone,
-            locationServicesEnabled.toString(),
-        ).joinToString("|")
-    }
-
-    private fun loadLastStatusFingerprint(): String? {
-        return getSharedPreferences(STATUS_PREFS_NAME, MODE_PRIVATE)
-            .getString(KEY_LAST_STATUS_FINGERPRINT, null)
-    }
-
-    private fun saveLastStatusFingerprint(fingerprint: String) {
-        getSharedPreferences(STATUS_PREFS_NAME, MODE_PRIVATE)
-            .edit()
-            .putString(KEY_LAST_STATUS_FINGERPRINT, fingerprint)
-            .apply()
-    }
-
-    private fun flushQueuedReportsAsync(config: TrackerConfig) {
-        ioExecutor.execute {
-            flushHourlyReports(config)
-        }
     }
 
     private fun shouldCaptureRoutineState(config: TrackerConfig, capturedAt: String): Boolean {
@@ -460,6 +705,62 @@ class TrackerService : Service() {
         manager.createNotificationChannel(channel)
     }
 
+    private fun scheduleSelfRestart() {
+        if (restartScheduled) {
+            return
+        }
+        val config = TrackerPrefs.load(this)
+        if (config.deviceId == null) {
+            return
+        }
+        restartScheduled = true
+        val alarmManager = getSystemService(ALARM_SERVICE) as AlarmManager
+        val restartIntent = Intent(this, ServiceRestartReceiver::class.java).apply {
+            action = ServiceRestartReceiver.ACTION_RESTART_TRACKER_SERVICE
+            `package` = packageName
+        }
+        val pendingIntent = PendingIntent.getBroadcast(
+            this,
+            1001,
+            restartIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        runCatching {
+            alarmManager.setAndAllowWhileIdle(
+                AlarmManager.RTC_WAKEUP,
+                System.currentTimeMillis() + 3_000L,
+                pendingIntent
+            )
+        }.onFailure {
+            restartScheduled = false
+        }
+    }
+
+    private fun scheduleWatchdog() {
+        val config = TrackerPrefs.load(this)
+        if (config.deviceId == null) {
+            return
+        }
+        val alarmManager = getSystemService(ALARM_SERVICE) as AlarmManager
+        val watchdogIntent = Intent(this, ServiceRestartReceiver::class.java).apply {
+            action = ServiceRestartReceiver.ACTION_ENSURE_TRACKER_SERVICE_RUNNING
+            `package` = packageName
+        }
+        val pendingIntent = PendingIntent.getBroadcast(
+            this,
+            1002,
+            watchdogIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        runCatching {
+            alarmManager.setAndAllowWhileIdle(
+                AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                SystemClock.elapsedRealtime() + watchdogIntervalMs,
+                pendingIntent
+            )
+        }
+    }
+
     private fun buildNotification(content: String): Notification {
         val intent = Intent(this, MainActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(
@@ -500,9 +801,8 @@ class TrackerService : Service() {
     }
 
     companion object {
+        const val ACTION_SYNC_NOW = "com.lazzy.losttracker.action.SYNC_NOW"
         private const val CHANNEL_ID = "lost_tracker_channel"
         private const val NOTIFICATION_ID = 1001
-        private const val STATUS_PREFS_NAME = "tracker_status_state"
-        private const val KEY_LAST_STATUS_FINGERPRINT = "last_status_fingerprint"
     }
 }

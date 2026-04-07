@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "28961359165",
+    "project_id": "myware-1f5c4",
+    "storage_bucket": "myware-1f5c4.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:28961359165:android:beab21e4feeb2fb1fa7154",
+        "android_client_info": {
+          "package_name": "com.lazzy.losttracker"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDWeYLvQACBIhwEhMSoCrNudUylYtUM8qk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

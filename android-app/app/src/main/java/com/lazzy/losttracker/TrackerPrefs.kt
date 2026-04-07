@@ -10,11 +10,12 @@ data class TrackerConfig(
     val ownerEmail: String,
     val deviceName: String,
     val deviceToken: String,
-    val deviceId: String?
+    val deviceId: String?,
+    val pushToken: String?
 )
 
 object TrackerPrefs {
-    const val DEFAULT_SERVER_URL = "https://intensive-retain-pmc-dry.trycloudflare.com"
+    const val DEFAULT_SERVER_URL = "https://app.anuditk.com.np"
     private val DEVICE_ID_PATTERN = Regex("^[0-9]{16}$")
     private const val PREFS_NAME = "lost_tracker_prefs"
     private const val KEY_SERVER_URL = "server_url"
@@ -22,6 +23,8 @@ object TrackerPrefs {
     private const val KEY_DEVICE_NAME = "device_name"
     private const val KEY_DEVICE_TOKEN = "device_token"
     private const val KEY_DEVICE_ID = "device_id"
+    private const val KEY_PUSH_TOKEN = "push_token"
+    private const val KEY_BACKGROUND_PROMPT_SHOWN = "background_prompt_shown"
     private val LOCAL_HOSTS = setOf("127.0.0.1", "localhost", "::1")
 
     fun load(context: Context): TrackerConfig {
@@ -43,7 +46,8 @@ object TrackerPrefs {
             ownerEmail = prefs.getString(KEY_OWNER_EMAIL, fallbackOwner).orEmpty(),
             deviceName = prefs.getString(KEY_DEVICE_NAME, fallbackName).orEmpty(),
             deviceToken = token,
-            deviceId = storedDeviceId
+            deviceId = storedDeviceId,
+            pushToken = prefs.getString(KEY_PUSH_TOKEN, null)?.trim()?.takeIf { it.isNotEmpty() }
         )
     }
 
@@ -68,6 +72,25 @@ object TrackerPrefs {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
             .remove(KEY_DEVICE_ID)
+            .apply()
+    }
+
+    fun savePushToken(context: Context, pushToken: String) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_PUSH_TOKEN, pushToken)
+            .apply()
+    }
+
+    fun hasShownBackgroundPrompt(context: Context): Boolean {
+        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getBoolean(KEY_BACKGROUND_PROMPT_SHOWN, false)
+    }
+
+    fun markBackgroundPromptShown(context: Context) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_BACKGROUND_PROMPT_SHOWN, true)
             .apply()
     }
 
