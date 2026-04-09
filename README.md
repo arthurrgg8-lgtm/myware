@@ -8,10 +8,15 @@ Google Services is a PC-hosted device tracking stack with three working parts:
 
 This repository is meant to be understandable and runnable without prior chat context.
 
+For full maintainer and migration handoff instructions, read:
+
+- `HANDOFF.md`
+
 ## Repository Layout
 
 - `android-app/`: Android client source and Gradle build files
 - `backend/`: Python HTTP server, dashboard assets, and SQLite runtime data
+- `HANDOFF.md`: maintainer handoff, migration, and operational runbook
 - `launch-google-services.sh`: convenience backend launcher on port `8091`
 - `launch-cloudflare-tunnel.sh`: Cloudflare Tunnel launcher for `app.anuditk.com.np`
 - `launch-google-services-stack.sh`: combined launcher for backend, tunnel, and dashboard
