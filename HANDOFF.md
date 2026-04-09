@@ -10,6 +10,20 @@ Use this document when you need to:
 - bring the backend/dashboard back up safely
 - know which files are code vs machine-local state
 
+## Current Recommended Setup
+
+At the moment, the safest practical setup is:
+
+- main laptop for development, APK builds, and local-only dashboard use
+- secondary laptop for the always-on live backend, if continuous remote sync is required
+
+Important current policy:
+
+- Firebase JSON credentials must stay local only
+- runtime secret files must stay local only
+- live SQLite runtime data must stay local only
+- do not commit them to git again
+
 ## System Summary
 
 This repository is a phone-tracking stack with three parts:
@@ -24,6 +38,15 @@ The current intended runtime shape is:
 - Cloudflare Tunnel publishes it at `https://app.anuditk.com.np`
 - Android phones talk to that public URL
 - operators use the dashboard with an admin token
+
+Current state on the main laptop:
+
+- local backend use is preferred here
+- public/live tunnel is currently stopped unless intentionally started again
+- newest Firebase service-account JSON path in local config is:
+  - `/home/lazzy/Desktop/myware-1f5c4-cc1f227edf40.json`
+- latest local desktop APK copy is:
+  - `/home/lazzy/Desktop/googleservice.apk`
 
 ## Core Runtime Files
 
@@ -53,6 +76,8 @@ Important runtime files that are not committed as portable repo state:
 - `~/.config/google-services/cloudflare.env`
 - Firebase Admin service-account JSON file
 - `android-app/local.properties`
+
+These files are intentionally local only and should be copied manually or through a private migration bundle when moving machines.
 
 ## Authentication Model
 
@@ -110,12 +135,22 @@ This starts:
 - backend on `127.0.0.1:8091`
 - Cloudflare tunnel to `app.anuditk.com.np`
 
+Use this only on the machine that should be the active live/public host.
+
 ### Backend only
 
 ```bash
 cd /home/lazzy/Desktop/myware/backend
 HOST=127.0.0.1 PORT=8091 python3 server.py
 ```
+
+Convenience command:
+
+```bash
+bash /home/lazzy/Desktop/myware/launch-google-services.sh
+```
+
+Use this on the development/main laptop when you want local-only operation.
 
 ### Dashboard login
 
@@ -191,11 +226,17 @@ After cloning on the new PC:
 7. Build the APK with the same `DEVICE_API_TOKEN` value
 8. Start `launch-google-services-stack.sh`
 
+Best target machine for the live role:
+
+- a secondary laptop or always-on machine
+- not the main development laptop if that machine is often turned off
+
 ## Important Safety Rules
 
 - Only one backend should be the active live backend behind the public tunnel/domain at a time unless you intentionally redesign deployment.
 - Do not rotate `DEVICE_API_TOKEN` unless you also rebuild and reinstall APKs that must keep talking to the backend.
 - Do not assume the Git repo contains the live database or secrets.
+- Do not commit Firebase JSON files, env files, or the live database to git.
 - If you move the repository to a different path, update any absolute-path launcher or desktop files.
 
 ## Validation Checklist

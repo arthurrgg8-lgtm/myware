@@ -12,6 +12,12 @@ For full maintainer and migration handoff instructions, read:
 
 - `HANDOFF.md`
 
+Current recommendation:
+
+- use this machine for development and local-only dashboard access
+- use a secondary laptop if you want the backend to stay live while this main PC is off
+- keep Firebase JSON credentials local only and out of git
+
 ## Repository Layout
 
 - `android-app/`: Android client source and Gradle build files
@@ -106,6 +112,8 @@ This combined launcher:
 - opens the local dashboard on this PC
 - stops both processes together when you close the terminal
 
+Use this mode only on the machine that is supposed to be the active public/live host.
+
 It expects `CLOUDFLARED_TOKEN` either in the environment or in:
 
 `~/.config/google-services/cloudflare.env`
@@ -135,12 +143,20 @@ cd /home/lazzy/Desktop/myware/backend
 HOST=127.0.0.1 PORT=8091 python3 server.py
 ```
 
+Convenience launcher:
+
+```bash
+bash /home/lazzy/Desktop/myware/launch-google-services.sh
+```
+
 Dashboard URL:
 
 `http://127.0.0.1:8091/`
 
 The dashboard now requires the `ADMIN_TOKEN`.
 Enter it once in the `Admin token` field in the toolbar and click `Login`.
+
+This is the preferred mode on a development laptop when you want the project private/local only.
 
 For domain-backed deployment, run the backend locally on `127.0.0.1:8091` and publish it through your permanent Cloudflare Tunnel for:
 
@@ -169,6 +185,8 @@ For FCM-enabled builds, place:
 `/home/lazzy/Desktop/myware/android-app/app/google-services.json`
 
 before building.
+
+Do not commit `google-services.json` or Firebase service-account JSON files into git.
 
 ## Install The APK With adb
 
