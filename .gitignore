@@ -2,6 +2,7 @@
 .gradle/
 **/build/
 local.properties
+android-app/app/google-services.json
 
 # Python
 __pycache__/
