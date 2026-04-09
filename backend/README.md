@@ -4,9 +4,15 @@ This folder contains the Python backend for Google Services.
 
 ## Files
 
-- `server.py`: HTTP server and API routes
+- `server.py`: backend entry point
+- `config.py`: runtime settings and env loading
+- `auth.py`: admin/device request authentication
+- `db.py`: SQLite setup, migrations, and row mapping
+- `fcm.py`: Firebase wake-message delivery
+- `routes.py`: HTTP routes and API behavior
 - `static/`: browser dashboard assets
 - `data/`: SQLite database directory created at runtime
+- `tests/`: backend integration tests
 
 ## Run
 
@@ -36,6 +42,9 @@ FCM_SERVICE_ACCOUNT_JSON='/absolute/path/to/firebase-service-account.json'
 Open:
 
 `http://127.0.0.1:8091/`
+
+The dashboard requires `ADMIN_TOKEN`.
+Enter it in the dashboard toolbar login field after opening the page.
 
 ## Domain Deployment
 
@@ -89,6 +98,18 @@ publishes `http://127.0.0.1:8091` through `cloudflared tunnel --url ... --token 
 - `POST /api/devices/<id>/location` is used both for dashboard-requested fresh locations and for fast status-only updates such as Wi-Fi, carrier, IP, and network-state changes.
 - `POST /api/devices/<id>/hourly-reports` stores the queued hourly CSV/report rows that the phone syncs when the backend becomes reachable.
 - If a device was deleted from the dashboard but the APK is still installed, the phone can automatically enroll again and reappear as a new backend device record.
+- Devices also report compatibility profile and battery-optimization exemption state for dashboard reliability visibility.
+
+## Dashboard Observability
+
+The current dashboard shows:
+
+- heartbeat age and stale/offline state
+- location health and last location-ping recency
+- command request vs completion health
+- background mode status from the device
+- compatibility profile name from the device
+- reconnect counts from recent action history
 
 ## Dependencies
 

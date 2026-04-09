@@ -39,12 +39,15 @@ The Android app:
 - records hourly failure states too, such as `location disabled`, `no GPS/network fix`, or `permission missing`
 - automatically re-enrolls if the device is deleted from the dashboard while the APK is still installed
 - asks the background-run prompt only after setup and only once from the app side
+- chooses a compatibility profile based on the device manufacturer for safer background behavior on Samsung, Xiaomi, Vivo, Oppo/Realme, Huawei/Honor, and standard Android devices
+- reports battery-optimization exemption state and compatibility profile back to the backend for dashboard observability
 
 ### Backend dashboard
 
 The backend:
 
 - stores device state in SQLite
+- is split into config, auth, database, FCM, and route modules instead of one large file
 - serves the dashboard at `http://127.0.0.1:8091/`
 - publishes the same backend publicly through Cloudflare Tunnel at `https://app.anuditk.com.np`
 - shows live/attention state from recent real backend contact
@@ -54,6 +57,16 @@ The backend:
 - sends FCM wake messages when commands are created
 - supports removing a device from the backend
 - supports per-device hourly CSV export
+- requires separate admin and device API tokens
+
+### Dashboard
+
+The dashboard:
+
+- uses a simple built-in login input for the admin token
+- stores the admin token locally in the browser for later authenticated requests
+- shows per-device reachability, network, location, and recent event history
+- shows extra observability signals such as heartbeat age, location health, command flow health, background mode, compatibility profile, and reconnect count
 
 ## Requirements
 
@@ -120,6 +133,9 @@ HOST=127.0.0.1 PORT=8091 python3 server.py
 Dashboard URL:
 
 `http://127.0.0.1:8091/`
+
+The dashboard now requires the `ADMIN_TOKEN`.
+Enter it once in the `Admin token` field in the toolbar and click `Login`.
 
 For domain-backed deployment, run the backend locally on `127.0.0.1:8091` and publish it through your permanent Cloudflare Tunnel for:
 
@@ -205,6 +221,17 @@ The dashboard uses a simple rule:
 
 Command clicks do not count as proof of connectivity by themselves.
 
+## Dashboard Observability
+
+Each device card now includes:
+
+- heartbeat age
+- location health based on recent location pings or location-disabled events
+- command flow state based on recent command requests and completions
+- background mode as `Battery unrestricted` or `Battery optimized`
+- the active Android compatibility profile reported by the device
+- reconnect count from recent action history
+
 ## CSV Export
 
 Each device card can download an hourly CSV report.
@@ -228,10 +255,16 @@ The CSV may include:
 
 ## Main Files
 
-- backend server: `backend/server.py`
+- backend entry point: `backend/server.py`
+- backend config: `backend/config.py`
+- backend auth: `backend/auth.py`
+- backend database helpers: `backend/db.py`
+- backend FCM helper: `backend/fcm.py`
+- backend routes: `backend/routes.py`
 - dashboard HTML: `backend/static/index.html`
 - dashboard JS: `backend/static/app.js`
 - dashboard CSS: `backend/static/styles.css`
+- backend tests: `backend/tests/test_backend.py`
 - Android main activity: `android-app/app/src/main/java/com/lazzy/losttracker/MainActivity.kt`
 - Android tracker service: `android-app/app/src/main/java/com/lazzy/losttracker/TrackerService.kt`
 - Android restart receiver: `android-app/app/src/main/java/com/lazzy/losttracker/ServiceRestartReceiver.kt`
@@ -239,6 +272,7 @@ The CSV may include:
 - Android API client: `android-app/app/src/main/java/com/lazzy/losttracker/ApiClient.kt`
 - Android prefs: `android-app/app/src/main/java/com/lazzy/losttracker/TrackerPrefs.kt`
 - Android device status collector: `android-app/app/src/main/java/com/lazzy/losttracker/DeviceStatus.kt`
+- Android compatibility profiles: `android-app/app/src/main/java/com/lazzy/losttracker/DeviceCompatibility.kt`
 - Android hourly queue: `android-app/app/src/main/java/com/lazzy/losttracker/HourlyReportStore.kt`
 
 ## Notes For Future Maintainers
