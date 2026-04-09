@@ -12,22 +12,30 @@ import android.os.BatteryManager
 import android.telephony.SubscriptionManager
 import android.telephony.TelephonyManager
 import java.net.Inet4Address
+import java.net.Inet6Address
 import java.time.Instant
 import java.time.ZoneId
 
 data class DeviceSnapshot(
     val batteryLevel: Int,
     val isCharging: Boolean,
+    val batteryOptimizationExempt: Boolean,
+    val compatibilityProfile: String,
     val networkStatus: String,
     val wifiSsid: String?,
     val carrierName: String?,
     val localIp: String?,
+    val localIpv6: String?,
     val deviceTime: String,
     val deviceTimeZone: String,
     val deviceTimestampMs: Long,
 )
 
 object DeviceStatus {
+    private const val CACHE_PREFS = "device_status_cache"
+    private const val KEY_LAST_WIFI_SSID = "last_wifi_ssid"
+    private const val KEY_LAST_LOCAL_IPV6 = "last_local_ipv6"
+
     fun read(context: Context): DeviceSnapshot {
         return read(context, includeExtendedNetworkDetails = true)
     }
@@ -45,16 +53,22 @@ object DeviceStatus {
         val chargingStatus = batteryIntent?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
         val isCharging = chargingStatus == BatteryManager.BATTERY_STATUS_CHARGING ||
             chargingStatus == BatteryManager.BATTERY_STATUS_FULL
+        val powerManager = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+        val batteryOptimizationExempt = powerManager.isIgnoringBatteryOptimizations(context.packageName)
+        val compatibilityProfile = DeviceCompatibility.currentProfile().name
 
         val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         val network = connectivityManager.activeNetwork
             ?: return DeviceSnapshot(
                 batteryLevel = batteryLevel,
                 isCharging = isCharging,
+                batteryOptimizationExempt = batteryOptimizationExempt,
+                compatibilityProfile = compatibilityProfile,
                 networkStatus = "offline",
                 wifiSsid = null,
                 carrierName = null,
                 localIp = null,
+                localIpv6 = null,
                 deviceTime = now.isoTime,
                 deviceTimeZone = now.timeZone,
                 deviceTimestampMs = now.epochMs,
@@ -63,10 +77,13 @@ object DeviceStatus {
             ?: return DeviceSnapshot(
                 batteryLevel = batteryLevel,
                 isCharging = isCharging,
+                batteryOptimizationExempt = batteryOptimizationExempt,
+                compatibilityProfile = compatibilityProfile,
                 networkStatus = "offline",
                 wifiSsid = null,
                 carrierName = null,
                 localIp = null,
+                localIpv6 = null,
                 deviceTime = now.isoTime,
                 deviceTimeZone = now.timeZone,
                 deviceTimestampMs = now.epochMs,
@@ -78,19 +95,32 @@ object DeviceStatus {
             else -> "online"
         }
         val wifiSsid = if (includeExtendedNetworkDetails && networkStatus == "wifi") {
-            readWifiSsid(context, caps)
+            readWifiSsid(context, caps) ?: readCachedWifiSsid(context)
         } else {
             null
         }
         val carrierName = if (includeExtendedNetworkDetails) readCarrierName(context) else null
         val localIp = if (includeExtendedNetworkDetails) readLocalIp(connectivityManager, network) else null
+        val localIpv6 = if (includeExtendedNetworkDetails) {
+            readLocalIpv6(connectivityManager, network) ?: readCachedLocalIpv6(context)
+        } else {
+            null
+        }
+        cacheNetworkDetails(
+            context = context,
+            wifiSsid = wifiSsid,
+            localIpv6 = localIpv6,
+        )
         return DeviceSnapshot(
             batteryLevel = batteryLevel,
             isCharging = isCharging,
+            batteryOptimizationExempt = batteryOptimizationExempt,
+            compatibilityProfile = compatibilityProfile,
             networkStatus = networkStatus,
             wifiSsid = wifiSsid,
             carrierName = carrierName,
             localIp = localIp,
+            localIpv6 = localIpv6,
             deviceTime = now.isoTime,
             deviceTimeZone = now.timeZone,
             deviceTimestampMs = now.epochMs,
@@ -124,6 +154,12 @@ object DeviceStatus {
 
         val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
         return sanitizeSsid(wifiManager?.connectionInfo?.ssid)
+    }
+
+    private fun readCachedWifiSsid(context: Context): String? {
+        return context.getSharedPreferences(CACHE_PREFS, Context.MODE_PRIVATE)
+            .getString(KEY_LAST_WIFI_SSID, null)
+            ?.takeIf { it.isNotBlank() }
     }
 
     private fun sanitizeSsid(raw: String?): String? {
@@ -198,5 +234,49 @@ object DeviceStatus {
                 ?.firstOrNull { !it.isLoopbackAddress }
                 ?.hostAddress
         }.getOrNull()
+    }
+
+    private fun readLocalIpv6(
+        connectivityManager: ConnectivityManager,
+        network: android.net.Network
+    ): String? {
+        return runCatching {
+            connectivityManager.getLinkProperties(network)
+                ?.linkAddresses
+                ?.asSequence()
+                ?.map(LinkAddress::getAddress)
+                ?.filterIsInstance<Inet6Address>()
+                ?.firstOrNull {
+                    !it.isLoopbackAddress &&
+                        !it.isLinkLocalAddress &&
+                        !it.isMulticastAddress
+                }
+                ?.hostAddress
+                ?.substringBefore('%')
+        }.getOrNull()
+    }
+
+    private fun readCachedLocalIpv6(context: Context): String? {
+        return context.getSharedPreferences(CACHE_PREFS, Context.MODE_PRIVATE)
+            .getString(KEY_LAST_LOCAL_IPV6, null)
+            ?.takeIf { it.isNotBlank() }
+    }
+
+    private fun cacheNetworkDetails(
+        context: Context,
+        wifiSsid: String?,
+        localIpv6: String?,
+    ) {
+        context.getSharedPreferences(CACHE_PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .apply {
+                if (!wifiSsid.isNullOrBlank()) {
+                    putString(KEY_LAST_WIFI_SSID, wifiSsid)
+                }
+                if (!localIpv6.isNullOrBlank()) {
+                    putString(KEY_LAST_LOCAL_IPV6, localIpv6)
+                }
+            }
+            .apply()
     }
 }

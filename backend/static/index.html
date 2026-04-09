@@ -43,6 +43,12 @@
           <p class="section-note">Reachability first, then network, last known position, commands, and recent activity.</p>
         </div>
         <div class="toolbar-actions">
+          <label class="token-login" for="admin-token-input">
+            <span class="token-login-label">Admin token</span>
+            <input id="admin-token-input" class="token-login-input" type="password" placeholder="Enter dashboard token" autocomplete="off">
+          </label>
+          <button id="save-token-btn" class="ghost action-small">Login</button>
+          <button id="clear-token-btn" class="ghost action-small">Logout</button>
           <span id="dashboard-clock" class="toolbar-clock">Waiting for sync</span>
           <button id="refresh-btn" class="ghost action-small">Refresh</button>
         </div>
@@ -69,11 +75,11 @@
         <span class="device-banner-time"></span>
       </div>
       <div class="device-stats"></div>
+      <div class="observability-strip"></div>
       <div class="map-box">
         <div class="coords"></div>
       </div>
       <div class="action-row">
-        <button data-command="hard_fetch" class="ghost danger hard-fetch-button">Hard Fetch</button>
         <button data-command="request_location" class="ghost">Request location</button>
         <button data-command="request_details" class="ghost">Refresh details</button>
         <button data-download-report class="ghost">Download CSV</button>

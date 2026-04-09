@@ -19,7 +19,9 @@ class ServiceRestartReceiver : BroadcastReceiver() {
             if (intent.action == ACTION_FCM_WAKE_TRACKER_SERVICE) {
                 serviceIntent.action = TrackerService.ACTION_SYNC_NOW
             }
-            ContextCompat.startForegroundService(context, serviceIntent)
+            runCatching {
+                ContextCompat.startForegroundService(context, serviceIntent)
+            }
         }
     }
 

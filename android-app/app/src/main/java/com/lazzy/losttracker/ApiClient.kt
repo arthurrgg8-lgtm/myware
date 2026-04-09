@@ -157,13 +157,17 @@ object ApiClient {
         method: String,
         payload: JSONObject? = null,
         connectTimeoutMs: Int = 10_000,
-        readTimeoutMs: Int = 15_000
+        readTimeoutMs: Int = 15_000,
+        authenticated: Boolean = true
     ): JSONObject {
         val connection = URL(endpoint).openConnection() as HttpURLConnection
         connection.requestMethod = method
         connection.connectTimeout = connectTimeoutMs
         connection.readTimeout = readTimeoutMs
         connection.setRequestProperty("Content-Type", "application/json")
+        if (authenticated && BuildConfig.TRACKER_API_TOKEN.isNotBlank()) {
+            connection.setRequestProperty("X-Tracker-Device-Token", BuildConfig.TRACKER_API_TOKEN)
+        }
         connection.doInput = true
 
         if (payload != null) {
@@ -198,10 +202,13 @@ object ApiClient {
             .put("accuracyM", accuracyM)
             .put("batteryLevel", snapshot.batteryLevel)
             .put("isCharging", snapshot.isCharging)
+            .put("batteryOptimizationExempt", snapshot.batteryOptimizationExempt)
+            .put("compatibilityProfile", snapshot.compatibilityProfile)
             .put("networkStatus", snapshot.networkStatus)
             .put("wifiSsid", snapshot.wifiSsid)
             .put("carrierName", snapshot.carrierName)
             .put("localIp", snapshot.localIp)
+            .put("localIpv6", snapshot.localIpv6)
             .put("publicIp", networkSnapshot.publicIp)
             .put("ispName", networkSnapshot.ispName)
             .put("locationServicesEnabled", locationServicesEnabled)
@@ -233,7 +240,13 @@ object ApiClient {
     }
 
     private fun requestPublicNetworkInfo(endpoint: String): PublicNetworkInfo {
-        val response = request(endpoint, "GET", connectTimeoutMs = 1_500, readTimeoutMs = 2_000)
+        val response = request(
+            endpoint,
+            "GET",
+            connectTimeoutMs = 1_500,
+            readTimeoutMs = 2_000,
+            authenticated = false
+        )
         val connection = response.optJSONObject("connection")
         return PublicNetworkInfo(
             ip = response.optString("ip").takeIf { it.isNotBlank() }

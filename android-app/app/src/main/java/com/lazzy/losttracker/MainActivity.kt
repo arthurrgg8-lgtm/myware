@@ -30,6 +30,9 @@ class MainActivity : AppCompatActivity() {
     private var autoSetupStarted = false
     private var permissionRequestInFlight = false
     private var batterySettingsInFlight = false
+    private var introAnimationShown = false
+    private var introAnimationRunning = false
+    private var trackingServiceStartRequested = false
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -59,13 +62,17 @@ class MainActivity : AppCompatActivity() {
         TrackerPrefs.ensureDefaults(this)
         refreshPushToken()
         refreshSummary()
+        updateStableVisibility()
+        maybeStartIntroAnimation()
         driveAutomaticSetup()
     }
 
     override fun onResume() {
         super.onResume()
         refreshSummary()
-        startScanAnimation()
+        if (!introAnimationRunning) {
+            updateStableVisibility()
+        }
         driveAutomaticSetup()
     }
 
@@ -77,7 +84,29 @@ class MainActivity : AppCompatActivity() {
 
     private fun refreshSummary() {
         val config = TrackerPrefs.load(this)
+        val compatibilityProfile = DeviceCompatibility.currentProfile()
         deviceIdText.text = "Device ID: ${config.deviceId ?: "preparing"}"
+        protectionText.text = buildString {
+            append("Your device is protected")
+            append('\n')
+            append("Profile: ${compatibilityProfile.name}")
+            append('\n')
+            append(compatibilityProfile.guidance)
+        }
+    }
+
+    private fun updateStableVisibility() {
+        scanningText.visibility = View.GONE
+        deviceIdText.visibility = View.VISIBLE
+        protectionText.visibility = View.VISIBLE
+    }
+
+    private fun maybeStartIntroAnimation() {
+        if (introAnimationShown) {
+            return
+        }
+        introAnimationShown = true
+        startScanAnimation()
     }
 
     private fun refreshPushToken() {
@@ -93,6 +122,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun startScanAnimation() {
         uiHandler.removeCallbacksAndMessages(null)
+        introAnimationRunning = true
         scanningText.visibility = View.VISIBLE
         deviceIdText.visibility = View.INVISIBLE
         protectionText.visibility = View.INVISIBLE
@@ -115,9 +145,8 @@ class MainActivity : AppCompatActivity() {
             }, delayMs)
         }
         uiHandler.postDelayed({
-            scanningText.visibility = View.GONE
-            deviceIdText.visibility = View.VISIBLE
-            protectionText.visibility = View.VISIBLE
+            introAnimationRunning = false
+            updateStableVisibility()
         }, 30_000L)
     }
 
@@ -133,6 +162,7 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     autoSetupStarted = false
                     refreshSummary()
+                    updateStableVisibility()
                     driveAutomaticSetup()
                 }
             }.onFailure { error ->
@@ -152,6 +182,10 @@ class MainActivity : AppCompatActivity() {
         if (!hasTrackingAccess()) {
             return
         }
+        if (trackingServiceStartRequested) {
+            return
+        }
+        trackingServiceStartRequested = true
         ContextCompat.startForegroundService(this, Intent(this, TrackerService::class.java))
     }
 

@@ -3,6 +3,15 @@ plugins {
     id 'kotlin-android'
 }
 
+def trackerApiToken = ((project.findProperty("TRACKER_API_TOKEN") ?: System.getenv("TRACKER_API_TOKEN") ?: "") as String)
+        .replace("\\", "\\\\")
+        .replace("\"", "\\\"")
+def commandPollIntervalMs = (project.findProperty("COMMAND_POLL_INTERVAL_MS") ?: System.getenv("COMMAND_POLL_INTERVAL_MS") ?: "2000") as String
+def heartbeatIntervalMs = (project.findProperty("HEARTBEAT_INTERVAL_MS") ?: System.getenv("HEARTBEAT_INTERVAL_MS") ?: "15000") as String
+def watchdogIntervalMs = (project.findProperty("WATCHDOG_INTERVAL_MS") ?: System.getenv("WATCHDOG_INTERVAL_MS") ?: "30000") as String
+def enablePersistentWakeLock = (project.findProperty("ENABLE_PERSISTENT_WAKE_LOCK") ?: System.getenv("ENABLE_PERSISTENT_WAKE_LOCK") ?: "false") as String
+def enablePersistentWifiLock = (project.findProperty("ENABLE_PERSISTENT_WIFI_LOCK") ?: System.getenv("ENABLE_PERSISTENT_WIFI_LOCK") ?: "false") as String
+
 android {
     namespace 'com.lazzy.losttracker'
     compileSdk 34
@@ -13,6 +22,16 @@ android {
         targetSdk 34
         versionCode 1
         versionName "1.0"
+        buildConfigField "String", "TRACKER_API_TOKEN", "\"${trackerApiToken}\""
+        buildConfigField "long", "COMMAND_POLL_INTERVAL_MS", "${commandPollIntervalMs}L"
+        buildConfigField "long", "HEARTBEAT_INTERVAL_MS", "${heartbeatIntervalMs}L"
+        buildConfigField "long", "WATCHDOG_INTERVAL_MS", "${watchdogIntervalMs}L"
+        buildConfigField "boolean", "ENABLE_PERSISTENT_WAKE_LOCK", enablePersistentWakeLock.toBoolean().toString()
+        buildConfigField "boolean", "ENABLE_PERSISTENT_WIFI_LOCK", enablePersistentWifiLock.toBoolean().toString()
+    }
+
+    buildFeatures {
+        buildConfig true
     }
 
     buildTypes {

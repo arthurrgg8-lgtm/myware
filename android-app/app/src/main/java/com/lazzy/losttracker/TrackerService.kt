@@ -35,9 +35,10 @@ class TrackerService : Service() {
     private val ioExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val commandExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val heartbeatExecutor: ExecutorService = Executors.newSingleThreadExecutor()
-    private val pollIntervalMs = 500L
-    private val heartbeatIntervalMs = 5_000L
-    private val watchdogIntervalMs = 10_000L
+    private val compatibilityProfile = DeviceCompatibility.currentProfile()
+    private val pollIntervalMs = compatibilityProfile.commandPollIntervalMs
+    private val heartbeatIntervalMs = compatibilityProfile.heartbeatIntervalMs
+    private val watchdogIntervalMs = compatibilityProfile.watchdogIntervalMs
     private val inFlightCommandIds = Collections.synchronizedSet(mutableSetOf<Int>())
     @Volatile
     private var lastNotificationContent: String? = null
@@ -62,14 +63,14 @@ class TrackerService : Service() {
             lastHeartbeatSentAtMs = 0L
             handler.post {
                 scheduleWatchdog()
-                syncWithServer()
+                runCompatibilitySync()
             }
         }
     }
 
     private val tick = object : Runnable {
         override fun run() {
-            syncWithServer()
+            runCompatibilitySync()
             scheduleWatchdog()
             handler.postDelayed(this, pollIntervalMs)
         }
@@ -78,8 +79,12 @@ class TrackerService : Service() {
     override fun onCreate() {
         super.onCreate()
         createChannel()
-        acquireServiceWakeLock()
-        acquireWifiLock()
+        if (BuildConfig.ENABLE_PERSISTENT_WAKE_LOCK) {
+            acquireServiceWakeLock()
+        }
+        if (BuildConfig.ENABLE_PERSISTENT_WIFI_LOCK) {
+            acquireWifiLock()
+        }
         runCatching {
             connectivityManager.registerDefaultNetworkCallback(networkCallback)
         }
@@ -99,7 +104,7 @@ class TrackerService : Service() {
         scheduleWatchdog()
         if (intent?.action == ACTION_SYNC_NOW) {
             lastHeartbeatSentAtMs = 0L
-            handler.post { syncWithServer() }
+            handler.post { runCompatibilitySync() }
         }
         handler.post(tick)
         return START_STICKY
@@ -127,6 +132,15 @@ class TrackerService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    private fun runCompatibilitySync() {
+        val wakeLock = acquireTransientSyncWakeLock()
+        try {
+            syncWithServer()
+        } finally {
+            wakeLock?.releaseSafe()
+        }
+    }
 
     private fun syncWithServer() {
         val config = TrackerPrefs.load(this)
@@ -506,6 +520,22 @@ class TrackerService : Service() {
             ).apply {
                 setReferenceCounted(false)
                 acquire(2 * 60_000L)
+            }
+        }.getOrNull()
+    }
+
+    private fun acquireTransientSyncWakeLock(): PowerManager.WakeLock? {
+        if (!compatibilityProfile.useTransientSyncWakeLock) {
+            return null
+        }
+        val powerManager = getSystemService(POWER_SERVICE) as? PowerManager ?: return null
+        return runCatching {
+            powerManager.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "$packageName:compat-sync"
+            ).apply {
+                setReferenceCounted(false)
+                acquire(compatibilityProfile.syncWakeLockTimeoutMs)
             }
         }.getOrNull()
     }

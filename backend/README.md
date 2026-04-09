@@ -15,6 +15,24 @@ cd /home/lazzy/Desktop/myware/backend
 HOST=127.0.0.1 PORT=8091 python3 server.py
 ```
 
+Before running, set:
+
+- `ADMIN_TOKEN`: required for dashboard/API operator access
+- `DEVICE_API_TOKEN`: required for Android device enroll/sync traffic
+- `FCM_SERVICE_ACCOUNT_JSON`: optional override for the Firebase service account path
+
+You can place them in:
+
+`~/.config/google-services/backend.env`
+
+Example:
+
+```bash
+ADMIN_TOKEN='YOUR_DASHBOARD_ADMIN_TOKEN'
+DEVICE_API_TOKEN='YOUR_ANDROID_DEVICE_API_TOKEN'
+FCM_SERVICE_ACCOUNT_JSON='/absolute/path/to/firebase-service-account.json'
+```
+
 Open:
 
 `http://127.0.0.1:8091/`
@@ -71,6 +89,11 @@ publishes `http://127.0.0.1:8091` through `cloudflared tunnel --url ... --token 
 - `POST /api/devices/<id>/location` is used both for dashboard-requested fresh locations and for fast status-only updates such as Wi-Fi, carrier, IP, and network-state changes.
 - `POST /api/devices/<id>/hourly-reports` stores the queued hourly CSV/report rows that the phone syncs when the backend becomes reachable.
 - If a device was deleted from the dashboard but the APK is still installed, the phone can automatically enroll again and reappear as a new backend device record.
+
+## Dependencies
+
+- Python 3 standard library
+- `PyJWT` for FCM OAuth token generation
 
 ## Storage
 

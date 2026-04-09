@@ -60,8 +60,9 @@ The backend:
 ### Backend
 
 - Python 3
+- `PyJWT` for FCM OAuth token generation
 - `cloudflared` for the public route
-- no extra Python package install is required in the current environment
+- backend auth tokens for dashboard and device traffic
 
 ### Android build
 
@@ -69,6 +70,7 @@ The backend:
 - Android SDK
 - `adb` if you want direct install or debugging on a connected phone
 - `google-services.json` for Firebase-enabled builds
+- `TRACKER_API_TOKEN` set at build time to match the backend
 
 ## Run The Backend
 
@@ -94,6 +96,18 @@ Example file contents:
 
 ```bash
 CLOUDFLARED_TOKEN='YOUR_TUNNEL_TOKEN'
+```
+
+The backend also expects `ADMIN_TOKEN` and `DEVICE_API_TOKEN` either in the environment or in:
+
+`~/.config/google-services/backend.env`
+
+Example file contents:
+
+```bash
+ADMIN_TOKEN='YOUR_DASHBOARD_ADMIN_TOKEN'
+DEVICE_API_TOKEN='YOUR_ANDROID_DEVICE_API_TOKEN'
+FCM_SERVICE_ACCOUNT_JSON='/absolute/path/to/firebase-service-account.json'
 ```
 
 ### Backend Only
@@ -122,7 +136,7 @@ CLOUDFLARED_TOKEN='YOUR_TUNNEL_TOKEN' bash ./launch-cloudflare-tunnel.sh
 
 ```bash
 cd /home/lazzy/Desktop/myware/android-app
-./gradlew assembleDebug
+TRACKER_API_TOKEN='YOUR_ANDROID_DEVICE_API_TOKEN' ./gradlew assembleDebug
 ```
 
 Build output:
@@ -169,6 +183,7 @@ For live reporting and dashboard commands, the phone must have a real path to th
 - The backend now also sends an FCM wake message when a command is created.
 - The phone still records one hourly report row for CSV export, even when the backend is offline.
 - Queued hourly rows upload when the backend becomes reachable again.
+- Default Android command polling is now 2 seconds, with less aggressive persistent lock behavior for wider device compatibility.
 
 ### If the backend is down
 
@@ -209,6 +224,7 @@ The CSV may include:
 - FCM wake improves command pickup, but it does not guarantee perfect autonomous heartbeat on every OEM build.
 - If the phone has no communication path to the backend at all, it cannot send live updates until a path returns.
 - Android still requires the foreground service notification icon while the background service is running; the app keeps that notification as quiet and static as possible.
+- If the backend auth tokens do not match the APK build token and dashboard admin token, devices and dashboard actions will be rejected.
 
 ## Main Files
 

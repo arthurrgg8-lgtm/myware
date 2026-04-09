@@ -8,17 +8,94 @@ const state = {
 const AUTO_REFRESH_MS = 2_000;
 const ENTER_LIVE_MS = 15_000;
 const EXIT_LIVE_MS = 25_000;
+const ADMIN_TOKEN_STORAGE_KEY = "trackerAdminToken";
 
-async function request(path, options = {}) {
+function getAdminToken() {
+  return window.localStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || "";
+}
+
+function setAdminToken(token) {
+  const value = String(token || "").trim();
+  if (value) {
+    window.localStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, value);
+  } else {
+    window.localStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
+  }
+}
+
+function syncAdminTokenInput() {
+  const input = document.getElementById("admin-token-input");
+  const saveButton = document.getElementById("save-token-btn");
+  const clearButton = document.getElementById("clear-token-btn");
+  const token = getAdminToken();
+  if (input && document.activeElement !== input) {
+    input.value = "";
+  }
+  if (saveButton) {
+    saveButton.textContent = token ? "Authenticated" : "Login";
+  }
+  if (clearButton) {
+    clearButton.disabled = !token;
+  }
+}
+
+async function request(path, options = {}, retryOnUnauthorized = true) {
+  const headers = {
+    "Content-Type": "application/json",
+    ...(options.headers || {}),
+  };
+  const adminToken = getAdminToken();
+  if (adminToken) {
+    headers.Authorization = `Bearer ${adminToken}`;
+  }
   const response = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
+    headers,
     ...options,
   });
+  if (response.status === 401 && retryOnUnauthorized) {
+    const token = getAdminToken();
+    if (token) {
+      return request(path, options, false);
+    }
+  }
   const data = await response.json();
   if (!response.ok) {
     throw new Error(data.error || "Request failed");
   }
   return data;
+}
+
+async function downloadCsvReport(deviceId) {
+  const headers = {};
+  const adminToken = getAdminToken();
+  if (adminToken) {
+    headers.Authorization = `Bearer ${adminToken}`;
+  }
+  let response = await fetch(`/api/devices/${deviceId}/hourly-report.csv`, { headers });
+  if (response.status === 401) {
+    const token = getAdminToken();
+    if (!token) {
+      throw new Error("admin authentication required");
+    }
+    response = await fetch(`/api/devices/${deviceId}/hourly-report.csv`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  }
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(errorText || "Report download failed");
+  }
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  const disposition = response.headers.get("Content-Disposition") || "";
+  const filenameMatch = disposition.match(/filename="([^"]+)"/);
+  link.href = url;
+  link.download = filenameMatch ? filenameMatch[1] : `${deviceId}-hourly-report.csv`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
 }
 
 function formatTime(value) {
@@ -121,12 +198,113 @@ function getDeviceMeta(device, stateMessage) {
 function getPendingCommandCount(device) {
   return (device.actions || []).filter((entry) => {
     const label = String(entry.actionType || "");
-    return label === "request_location" || label === "request_details" || label === "hard_fetch";
+    return label === "request_location" || label === "request_details";
   }).length;
+}
+
+function getActionEntries(device, actionType) {
+  return (device.actions || []).filter((entry) => String(entry.actionType || "") === actionType);
+}
+
+function getLatestAction(device, actionType) {
+  return getActionEntries(device, actionType)
+    .slice()
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0] || null;
+}
+
+function getLatestCommandRequest(device) {
+  return (device.actions || [])
+    .filter((entry) => ["request_location", "request_details"].includes(String(entry.actionType || "")))
+    .slice()
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0] || null;
+}
+
+function getLatestCommandCompletion(device) {
+  return getLatestAction(device, "command_completed");
+}
+
+function getLastLocationPing(device) {
+  return (device.history || [])
+    .slice()
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0] || null;
+}
+
+function getLocationHealthLabel(device) {
+  const latestDisabled = getLatestAction(device, "location_disabled");
+  if (latestDisabled && (!device.locationServicesEnabled || isRecent(latestDisabled.createdAt, 6 * 60 * 60 * 1000))) {
+    return `Location blocked since ${getFormattedRelativeAge(latestDisabled.createdAt)}`;
+  }
+  const lastPing = getLastLocationPing(device);
+  if (lastPing) {
+    return `Last location ping ${getFormattedRelativeAge(lastPing.createdAt)}`;
+  }
+  return "No location pings yet";
+}
+
+function getCommandHealthLabel(device) {
+  const latestRequest = getLatestCommandRequest(device);
+  const latestCompletion = getLatestCommandCompletion(device);
+  if (!latestRequest) {
+    return "No recent dashboard commands";
+  }
+  if (!latestCompletion) {
+    return `Last command waiting since ${getFormattedRelativeAge(latestRequest.createdAt)}`;
+  }
+  const requestTime = new Date(latestRequest.createdAt).getTime();
+  const completionTime = new Date(latestCompletion.createdAt).getTime();
+  if (completionTime >= requestTime) {
+    return `Last command completed ${getFormattedRelativeAge(latestCompletion.createdAt)}`;
+  }
+  return `Last command waiting since ${getFormattedRelativeAge(latestRequest.createdAt)}`;
+}
+
+function getDeviceOpsItems(device) {
+  const heartbeatTime = getHeartbeatTime(device);
+  const commandRequests = (device.actions || []).filter((entry) =>
+    ["request_location", "request_details"].includes(String(entry.actionType || ""))
+  ).length;
+  const commandCompletions = getActionEntries(device, "command_completed").length;
+  const reconnects = getActionEntries(device, "reconnected").length;
+  return [
+    {
+      label: "Heartbeat",
+      value: heartbeatTime ? getFormattedRelativeAge(heartbeatTime) : "Never",
+      tone: isDeviceLive(device) ? "ok" : "warn",
+    },
+    {
+      label: "Location health",
+      value: getLocationHealthLabel(device),
+      tone: device.locationServicesEnabled ? "neutral" : "warn",
+    },
+    {
+      label: "Command flow",
+      value: getCommandHealthLabel(device),
+      tone: getPendingCommandCount(device) > 0 ? "warn" : "ok",
+    },
+    {
+      label: "Background mode",
+      value: device.batteryOptimizationExempt ? "Battery unrestricted" : "Battery optimized",
+      tone: device.batteryOptimizationExempt ? "ok" : "warn",
+    },
+    {
+      label: "Compatibility",
+      value: device.compatibilityProfile || "Unknown",
+      tone: "neutral",
+    },
+    {
+      label: "Recent ops",
+      value: `${commandCompletions}/${commandRequests} commands completed${reconnects ? ` • ${reconnects} reconnects` : ""}`,
+      tone: commandCompletions < commandRequests ? "warn" : "neutral",
+    },
+  ];
 }
 
 function statItem(label, value, extraClass = "") {
   return `<div class="stat-item ${extraClass}"><span class="stat-label">${label}</span><strong class="stat-value">${value}</strong></div>`;
+}
+
+function opsItem(label, value, tone = "neutral") {
+  return `<div class="ops-item" data-tone="${tone}"><span class="ops-label">${label}</span><strong class="ops-value">${escapeHtml(value)}</strong></div>`;
 }
 
 function escapeHtml(value) {
@@ -201,15 +379,21 @@ function renderDevices() {
       node.querySelector(".device-stats").innerHTML = [
         statItem("Device ID", device.id),
         statItem("Battery", `${device.batteryLevel}%${device.isCharging ? " charging" : ""}`),
+        statItem("Background", device.batteryOptimizationExempt ? "Unrestricted" : "Optimized", device.batteryOptimizationExempt ? "" : "stat-warning"),
         statItem("Network", getNetworkLabel(device, isFresh)),
         statItem("Carrier", getOptionalDeviceValue(device.carrierName)),
         statItem("Commands", `${getPendingCommandCount(device)} recent`),
         statItem("Local IP", getOptionalDeviceValue(device.localIp)),
+        statItem("IPv6", getOptionalDeviceValue(device.localIpv6)),
         statItem("Public IP", getOptionalDeviceValue(device.publicIp)),
         statItem("ISP", getOptionalDeviceValue(device.ispName)),
         statItem("Location", device.locationServicesEnabled ? "Enabled" : "Disabled", device.locationServicesEnabled ? "" : "stat-warning"),
         statItem("Updated", formatTime(heartbeatTime), !isFresh ? "stat-warning" : "")
       ].join("");
+
+      node.querySelector(".observability-strip").innerHTML = getDeviceOpsItems(device)
+        .map((item) => opsItem(item.label, item.value, item.tone))
+        .join("");
 
       const coordsNode = node.querySelector(".coords");
       const mapsUrl = getGoogleMapsUrl(device);
@@ -240,12 +424,6 @@ function renderDevices() {
 
       node.querySelectorAll("[data-command]").forEach((button) => {
         button.addEventListener("click", async () => {
-          if (button.dataset.command === "hard_fetch") {
-            const confirmed = window.confirm("I do not recommend doing this. Would you like to proceed anyway?");
-            if (!confirmed) {
-              return;
-            }
-          }
           try {
             await request(`/api/devices/${device.id}/commands`, {
               method: "POST",
@@ -278,8 +456,12 @@ function renderDevices() {
 
       const downloadButton = node.querySelector("[data-download-report]");
       if (downloadButton) {
-        downloadButton.addEventListener("click", () => {
-          window.location.href = `/api/devices/${device.id}/hourly-report.csv`;
+        downloadButton.addEventListener("click", async () => {
+          try {
+            await downloadCsvReport(device.id);
+          } catch (error) {
+            alert(error.message);
+          }
         });
       }
 
@@ -364,8 +546,44 @@ document.getElementById("refresh-btn").addEventListener("click", async (event) =
     }, 1500);
   }
 });
+
+document.getElementById("save-token-btn").addEventListener("click", async () => {
+  const input = document.getElementById("admin-token-input");
+  setAdminToken(input ? input.value : "");
+  if (input) {
+    input.value = "";
+  }
+  syncAdminTokenInput();
+  try {
+    await loadDevices();
+  } catch (error) {
+    const button = document.getElementById("save-token-btn");
+    if (button) {
+      button.textContent = "Login failed";
+      window.setTimeout(() => syncAdminTokenInput(), 1500);
+    }
+  }
+});
+
+document.getElementById("clear-token-btn").addEventListener("click", () => {
+  setAdminToken("");
+  syncAdminTokenInput();
+});
+
+document.getElementById("admin-token-input").addEventListener("keydown", async (event) => {
+  if (event.key !== "Enter") {
+    return;
+  }
+  event.preventDefault();
+  document.getElementById("save-token-btn").click();
+});
+
 window.setInterval(loadDevices, AUTO_REFRESH_MS);
 
+syncAdminTokenInput();
 loadDevices().catch((error) => {
-  alert(error.message);
+  const status = document.getElementById("dashboard-status");
+  if (status) {
+    status.textContent = `Dashboard load failed: ${error.message}`;
+  }
 });
