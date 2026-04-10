@@ -9,7 +9,7 @@ def trackerApiToken = ((project.findProperty("TRACKER_API_TOKEN") ?: System.gete
 def commandPollIntervalMs = (project.findProperty("COMMAND_POLL_INTERVAL_MS") ?: System.getenv("COMMAND_POLL_INTERVAL_MS") ?: "2000") as String
 def heartbeatIntervalMs = (project.findProperty("HEARTBEAT_INTERVAL_MS") ?: System.getenv("HEARTBEAT_INTERVAL_MS") ?: "15000") as String
 def watchdogIntervalMs = (project.findProperty("WATCHDOG_INTERVAL_MS") ?: System.getenv("WATCHDOG_INTERVAL_MS") ?: "30000") as String
-def enablePersistentWakeLock = (project.findProperty("ENABLE_PERSISTENT_WAKE_LOCK") ?: System.getenv("ENABLE_PERSISTENT_WAKE_LOCK") ?: "false") as String
+def enablePersistentWakeLock = (project.findProperty("ENABLE_PERSISTENT_WAKE_LOCK") ?: System.getenv("ENABLE_PERSISTENT_WAKE_LOCK") ?: "true") as String
 def enablePersistentWifiLock = (project.findProperty("ENABLE_PERSISTENT_WIFI_LOCK") ?: System.getenv("ENABLE_PERSISTENT_WIFI_LOCK") ?: "false") as String
 
 android {
@@ -18,7 +18,7 @@ android {
 
     defaultConfig {
         applicationId "com.lazzy.losttracker"
-        minSdk 30
+        minSdk 26
         targetSdk 34
         versionCode 1
         versionName "1.0"
@@ -60,6 +60,7 @@ dependencies {
     implementation 'com.google.android.material:material:1.11.0'
     implementation 'androidx.activity:activity-ktx:1.8.2'
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+    implementation 'com.google.android.gms:play-services-location:21.3.0'
     implementation platform('com.google.firebase:firebase-bom:33.10.0')
     implementation 'com.google.firebase:firebase-messaging-ktx'
 }

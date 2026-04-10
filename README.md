@@ -34,22 +34,22 @@ Current recommendation:
 
 The Android app:
 
-- auto-enrolls after required Android permissions exist
-- auto-starts tracking after setup
+- auto-enrolls before location permission so a fresh install can appear in the dashboard first
+- auto-starts the tracking service as soon as the device is enrolled
 - stores a stable local device token
 - stores an FCM push token for wake support
 - exposes a public 16-digit device ID to the dashboard
-- keeps a required foreground service notification, but leaves it static and silent
-- sends a lightweight heartbeat for `live` / `attention`
+- keeps a required foreground service notification, but leaves it static and quiet
+- sends a lightweight heartbeat for current reachability and stale-device detection
 - checks dashboard commands every 2 seconds as a baseline
 - can also wake on FCM when the backend creates a command
-- fetches a fresh location only when the dashboard sends `Request location` or `Hard Fetch`
+- fetches a fresh location when the dashboard sends `Request location` or `Hard Fetch`, with fused-location, last-known, and local-cache fallback paths
 - sends battery, network, Wi-Fi SSID, IP, ISP, and location data when the handset exposes those values
 - keeps routine reachability separate from command-triggered location/detail work
 - records hourly report entries locally and syncs them later when the backend becomes reachable again
 - records hourly failure states too, such as `location disabled`, `no GPS/network fix`, or `permission missing`
 - automatically re-enrolls if the device is deleted from the dashboard while the APK is still installed
-- asks the background-run prompt only after setup and only once from the app side
+- uses a foreground location service with a watchdog, restart alarm, boot/package-replaced restart, and wake-lock-backed compatibility profile for better background survival
 - chooses a compatibility profile based on the device manufacturer for safer background behavior on Samsung, Xiaomi, Vivo, Oppo/Realme, Huawei/Honor, and standard Android devices
 - reports battery-optimization exemption state and compatibility profile back to the backend for dashboard observability
 
@@ -61,7 +61,7 @@ The backend:
 - is split into config, auth, database, FCM, and route modules instead of one large file
 - serves the dashboard at `http://127.0.0.1:8091/`
 - publishes the same backend publicly through Cloudflare Tunnel at `https://app.anuditk.com.np`
-- shows live/attention state from recent real backend contact
+- shows connected/stale state from recent real backend contact
 - supports `Request location`
 - supports `Refresh details`
 - supports `Hard Fetch`
@@ -95,13 +95,14 @@ The dashboard:
 - `adb` if you want direct install or debugging on a connected phone
 - `google-services.json` for Firebase-enabled builds
 - `TRACKER_API_TOKEN` set at build time to match the backend
+- current APK floor is Android 8 / API 26
 
 ## Run The Backend
 
 ### Recommended
 
 ```bash
-bash /home/lazzy/Desktop/myware/launch-google-services-stack.sh
+bash /home/anudit/myware/launch-google-services-stack.sh
 ```
 
 This combined launcher:
@@ -139,14 +140,14 @@ FCM_SERVICE_ACCOUNT_JSON='/absolute/path/to/firebase-service-account.json'
 ### Backend Only
 
 ```bash
-cd /home/lazzy/Desktop/myware/backend
+cd /home/anudit/myware/backend
 HOST=127.0.0.1 PORT=8091 python3 server.py
 ```
 
 Convenience launcher:
 
 ```bash
-bash /home/lazzy/Desktop/myware/launch-google-services.sh
+bash /home/anudit/myware/launch-google-services.sh
 ```
 
 Dashboard URL:
@@ -165,24 +166,24 @@ For domain-backed deployment, run the backend locally on `127.0.0.1:8091` and pu
 Example:
 
 ```bash
-cd /home/lazzy/Desktop/myware
+cd /home/anudit/myware
 CLOUDFLARED_TOKEN='YOUR_TUNNEL_TOKEN' bash ./launch-cloudflare-tunnel.sh
 ```
 
 ## Build The APK
 
 ```bash
-cd /home/lazzy/Desktop/myware/android-app
+cd /home/anudit/myware/android-app
 TRACKER_API_TOKEN='YOUR_ANDROID_DEVICE_API_TOKEN' ./gradlew assembleDebug
 ```
 
 Build output:
 
-`/home/lazzy/Desktop/myware/android-app/app/build/outputs/apk/debug/app-debug.apk`
+`/home/anudit/myware/android-app/app/build/outputs/apk/debug/app-debug.apk`
 
 For FCM-enabled builds, place:
 
-`/home/lazzy/Desktop/myware/android-app/app/google-services.json`
+`/home/anudit/myware/android-app/app/google-services.json`
 
 before building.
 
@@ -191,13 +192,13 @@ Do not commit `google-services.json` or Firebase service-account JSON files into
 ## Install The APK With adb
 
 ```bash
-/home/lazzy/Android/Sdk/platform-tools/adb install -r '/home/lazzy/Desktop/myware/android-app/app/build/outputs/apk/debug/app-debug.apk'
+adb install -r '/home/anudit/myware/android-app/app/build/outputs/apk/debug/app-debug.apk'
 ```
 
 Check the connected device list:
 
 ```bash
-/home/lazzy/Android/Sdk/platform-tools/adb devices -l
+adb devices -l
 ```
 
 ## Connectivity Model
@@ -215,14 +216,14 @@ For live reporting and dashboard commands, the phone must have a real path to th
 ### Command and hourly behavior
 
 - The service keeps heartbeat/reachability separate from heavy work.
-- `live` / `attention` should mean recent real backend contact only.
+- connected/stale status should mean recent real backend contact only.
 - `Request location` triggers a fresh location fetch only.
 - `Refresh details` triggers a detail/status refresh only.
 - `Hard Fetch` tries a more aggressive wakeful status + location path.
 - The backend now also sends an FCM wake message when a command is created.
 - The phone still records one hourly report row for CSV export, even when the backend is offline.
 - Queued hourly rows upload when the backend becomes reachable again.
-- Default Android command polling is now 2 seconds, with less aggressive persistent lock behavior for wider device compatibility.
+- Default Android command polling is 2 seconds, with OEM-specific compatibility tuning and a persistent service wake lock enabled in the shipped APK.
 
 ### If the backend is down
 
@@ -239,8 +240,8 @@ If the backend is stopped:
 
 The dashboard uses a simple rule:
 
-- recent real backend contact from the phone: `live`
-- no recent real backend contact: `attention`
+- recent real backend contact from the phone: connected/current
+- no recent real backend contact: stale/unreachable
 
 Command clicks do not count as proof of connectivity by themselves.
 

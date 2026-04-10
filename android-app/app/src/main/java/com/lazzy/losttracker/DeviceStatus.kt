@@ -151,9 +151,7 @@ object DeviceStatus {
         if (ssid != null) {
             return ssid
         }
-
-        val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
-        return sanitizeSsid(wifiManager?.connectionInfo?.ssid)
+        return readCachedWifiSsid(context)
     }
 
     private fun readCachedWifiSsid(context: Context): String? {
@@ -175,7 +173,11 @@ object DeviceStatus {
         val subscriptionManager = context.getSystemService(SubscriptionManager::class.java)
 
         val subscriptionName = runCatching {
-            val activeDataId = SubscriptionManager.getActiveDataSubscriptionId()
+            val activeDataId = if (android.os.Build.VERSION.SDK_INT >= 30) {
+                SubscriptionManager.getActiveDataSubscriptionId()
+            } else {
+                SubscriptionManager.INVALID_SUBSCRIPTION_ID
+            }
             val activeInfo = subscriptionManager?.activeSubscriptionInfoList
                 ?.firstOrNull { it.subscriptionId == activeDataId }
                 ?: subscriptionManager?.activeSubscriptionInfoList?.firstOrNull()

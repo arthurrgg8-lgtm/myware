@@ -37,7 +37,7 @@
             android:name=".TrackerService"
             android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="dataSync|location" />
 
         <service
             android:name=".TrackerFirebaseMessagingService"

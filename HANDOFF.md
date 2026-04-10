@@ -44,9 +44,9 @@ Current state on the main laptop:
 - local backend use is preferred here
 - public/live tunnel is currently stopped unless intentionally started again
 - newest Firebase service-account JSON path in local config is:
-  - `/home/lazzy/Desktop/myware-1f5c4-cc1f227edf40.json`
+  - `/home/anudit/Downloads/myware-1f5c4-cc1f227edf40.json`
 - latest local desktop APK copy is:
-  - `/home/lazzy/Desktop/googleservice.apk`
+  - `/home/anudit/Desktop/myware-cloudflare-debug.apk`
 
 ## Core Runtime Files
 
@@ -127,7 +127,7 @@ CLOUDFLARED_TOKEN='YOUR_TUNNEL_TOKEN'
 Recommended:
 
 ```bash
-bash /home/lazzy/Desktop/myware/launch-google-services-stack.sh
+bash /home/anudit/myware/launch-google-services-stack.sh
 ```
 
 This starts:
@@ -140,14 +140,14 @@ Use this only on the machine that should be the active live/public host.
 ### Backend only
 
 ```bash
-cd /home/lazzy/Desktop/myware/backend
+cd /home/anudit/myware/backend
 HOST=127.0.0.1 PORT=8091 python3 server.py
 ```
 
 Convenience command:
 
 ```bash
-bash /home/lazzy/Desktop/myware/launch-google-services.sh
+bash /home/anudit/myware/launch-google-services.sh
 ```
 
 Use this on the development/main laptop when you want local-only operation.
@@ -165,23 +165,23 @@ Then enter `ADMIN_TOKEN` in the dashboard login field and click `Login`.
 ### Build
 
 ```bash
-cd /home/lazzy/Desktop/myware/android-app
+cd /home/anudit/myware/android-app
 TRACKER_API_TOKEN='YOUR_ANDROID_DEVICE_API_TOKEN' ./gradlew assembleDebug
 ```
 
 Output:
 
-`/home/lazzy/Desktop/myware/android-app/app/build/outputs/apk/debug/app-debug.apk`
+`/home/anudit/myware/android-app/app/build/outputs/apk/debug/app-debug.apk`
 
 ### Install with adb
 
 ```bash
-/home/lazzy/Android/Sdk/platform-tools/adb install -r '/home/lazzy/Desktop/myware/android-app/app/build/outputs/apk/debug/app-debug.apk'
+adb install -r '/home/anudit/myware/android-app/app/build/outputs/apk/debug/app-debug.apk'
 ```
 
 Desktop copy currently used for convenience:
 
-`/home/lazzy/Desktop/googleservice.apk`
+`/home/anudit/Desktop/myware-cloudflare-debug.apk`
 
 ## Data Model And Persistence
 
@@ -256,7 +256,7 @@ After setup or migration, verify:
 
 The dashboard currently shows:
 
-- live vs attention state
+- connected vs stale state
 - heartbeat age
 - location health
 - command flow health
@@ -271,14 +271,14 @@ This is the fastest way to spot OEM-specific background issues after installing 
 Backend integration tests:
 
 ```bash
-cd /home/lazzy/Desktop/myware
+cd /home/anudit/myware
 python3 -m unittest backend.tests.test_backend
 ```
 
 Android compile check:
 
 ```bash
-cd /home/lazzy/Desktop/myware/android-app
+cd /home/anudit/myware/android-app
 ./gradlew :app:compileDebugKotlin
 ```
 

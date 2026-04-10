@@ -4,7 +4,6 @@ import android.app.AlarmManager
 import android.app.PendingIntent
 import android.content.Intent
 import android.os.SystemClock
-import androidx.core.content.ContextCompat
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 
@@ -20,14 +19,8 @@ class TrackerFirebaseMessagingService : FirebaseMessagingService() {
         if (message.data["kind"] != "command_wakeup") {
             return
         }
-        val intent = Intent(this, TrackerService::class.java).apply {
-            action = TrackerService.ACTION_SYNC_NOW
-        }
-        runCatching {
-            ContextCompat.startForegroundService(this, intent)
-        }.onFailure {
-            scheduleWakeFallback()
-        }
+        TrackerServiceLauncher.start(this, syncNow = true)
+        scheduleWakeFallback()
     }
 
     private fun scheduleWakeFallback() {

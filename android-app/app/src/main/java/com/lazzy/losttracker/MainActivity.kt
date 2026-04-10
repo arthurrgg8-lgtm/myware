@@ -39,9 +39,7 @@ class MainActivity : AppCompatActivity() {
     ) {
         permissionRequestInFlight = false
         refreshSummary()
-        if (hasTrackingAccess()) {
-          driveAutomaticSetup()
-        }
+        driveAutomaticSetup()
     }
 
     private val settingsLauncher = registerForActivityResult(StartActivityForResult()) {
@@ -179,23 +177,20 @@ class MainActivity : AppCompatActivity() {
         if (config.deviceId == null) {
             return
         }
-        if (!hasTrackingAccess()) {
-            return
-        }
         if (trackingServiceStartRequested) {
             return
         }
         trackingServiceStartRequested = true
-        ContextCompat.startForegroundService(this, Intent(this, TrackerService::class.java))
+        TrackerServiceLauncher.start(this)
     }
 
     private fun requestRuntimePermissions() {
-        val wanted = mutableListOf(
-            Manifest.permission.ACCESS_COARSE_LOCATION,
-            Manifest.permission.ACCESS_FINE_LOCATION
-        )
-        if (Build.VERSION.SDK_INT >= 33) {
-            wanted += Manifest.permission.POST_NOTIFICATIONS
+        val wanted = mutableListOf<String>()
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            wanted += Manifest.permission.ACCESS_COARSE_LOCATION
+        }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            wanted += Manifest.permission.ACCESS_FINE_LOCATION
         }
         val missing = wanted.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
@@ -207,7 +202,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun requestAllRequiredAccess() {
-        if (!hasForegroundLocationPermission() || !hasNotificationPermission()) {
+        if (!hasForegroundLocationPermission()) {
             requestRuntimePermissions()
         }
     }
@@ -215,17 +210,16 @@ class MainActivity : AppCompatActivity() {
     private fun driveAutomaticSetup() {
         val config = TrackerPrefs.load(this)
         when {
-            !hasTrackingAccess() -> requestAllRequiredAccess()
             config.deviceId == null -> {
                 if (!autoSetupStarted) {
                     autoSetupStarted = true
                     enrollDevice()
                 }
             }
+            !hasTrackingAccess() -> requestAllRequiredAccess()
             else -> {
                 deviceIdText.post {
                     startTrackingService()
-                    requestBatteryOptimizationExemption()
                 }
             }
         }
@@ -274,8 +268,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun hasTrackingAccess(): Boolean {
-        return hasForegroundLocationPermission() &&
-            hasNotificationPermission()
+        return hasForegroundLocationPermission()
+    }
+
+    private fun shouldRequestNotificationPermission(): Boolean {
+        if (Build.VERSION.SDK_INT < 33 || hasNotificationPermission()) {
+            return false
+        }
+        if (!TrackerPrefs.hasShownNotificationPrompt(this)) {
+            return true
+        }
+        return shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS)
     }
 
     private fun updateTitleForFailure(message: String?) {

@@ -15,6 +15,7 @@ import android.net.wifi.WifiManager
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.location.Location
+import android.location.LocationListener
 import android.location.LocationManager
 import android.os.Build
 import android.os.CancellationSignal
@@ -23,14 +24,29 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.SystemClock
 import android.os.PowerManager
+import com.google.android.gms.location.FusedLocationProviderClient
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
+import com.google.android.gms.tasks.CancellationTokenSource
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import java.util.Collections
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 class TrackerService : Service() {
+    private data class LocationResolution(
+        val location: Location?,
+        val isFresh: Boolean,
+    )
+
+    private data class CachedLocationResolution(
+        val location: Location?,
+        val isRecent: Boolean,
+    )
+
     private val handler = Handler(Looper.getMainLooper())
     private val ioExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val commandExecutor: ExecutorService = Executors.newSingleThreadExecutor()
@@ -57,6 +73,9 @@ class TrackerService : Service() {
 
     private val connectivityManager by lazy {
         getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+    }
+    private val fusedLocationClient: FusedLocationProviderClient by lazy {
+        LocationServices.getFusedLocationProviderClient(this)
     }
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
@@ -92,13 +111,19 @@ class TrackerService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         restartScheduled = false
+        TrackerServiceLauncher.cancelStartupFallback(this)
+        TrackerServiceLauncher.cancelStartupFallback(this, syncNow = true)
         val content = getString(R.string.notification_body)
         lastNotificationContent = content
         ServiceCompat.startForeground(
             this,
             NOTIFICATION_ID,
             buildNotification(content),
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+            if (Build.VERSION.SDK_INT >= 29) {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+            } else {
+                0
+            }
         )
         handler.removeCallbacks(tick)
         scheduleWatchdog()
@@ -246,13 +271,16 @@ class TrackerService : Service() {
         capturedAt: String,
     ) {
         val locationManager = getSystemService(LOCATION_SERVICE) as LocationManager
-        val provider = when {
-            locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER) -> LocationManager.GPS_PROVIDER
-            locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER) -> LocationManager.NETWORK_PROVIDER
-            else -> null
+        val enabledProviders = buildList {
+            if (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+                add(LocationManager.GPS_PROVIDER)
+            }
+            if (locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
+                add(LocationManager.NETWORK_PROVIDER)
+            }
         }
 
-        if (provider == null) {
+        if (enabledProviders.isEmpty()) {
             ioExecutor.execute {
                 queueHourlyUnavailable(config, snapshot, "location disabled", capturedAt)
                 flushHourlyReports(config)
@@ -260,13 +288,14 @@ class TrackerService : Service() {
             return
         }
 
-        locationManager.getCurrentLocation(provider, CancellationSignal(), mainExecutor) { location: Location? ->
+        resolveBestLocation(locationManager, enabledProviders) { resolution ->
+            val location = resolution.location
             if (location == null) {
                 ioExecutor.execute {
                     queueHourlyUnavailable(config, snapshot, "no GPS/network fix", capturedAt)
                     flushHourlyReports(config)
                 }
-                return@getCurrentLocation
+                return@resolveBestLocation
             }
             ioExecutor.execute {
                 HourlyReportStore.saveLastKnownLocation(this, location.latitude, location.longitude)
@@ -329,13 +358,16 @@ class TrackerService : Service() {
             return
         }
         val locationManager = getSystemService(LOCATION_SERVICE) as LocationManager
-        val provider = when {
-            locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER) -> LocationManager.GPS_PROVIDER
-            locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER) -> LocationManager.NETWORK_PROVIDER
-            else -> null
+        val enabledProviders = buildList {
+            if (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+                add(LocationManager.GPS_PROVIDER)
+            }
+            if (locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
+                add(LocationManager.NETWORK_PROVIDER)
+            }
         }
 
-        if (provider == null) {
+        if (enabledProviders.isEmpty()) {
             ioExecutor.execute {
                 val networkSnapshot = if (requestedByServer) {
                     ApiClient.NetworkSnapshot(null, null)
@@ -378,9 +410,10 @@ class TrackerService : Service() {
             return
         }
 
-        locationManager.getCurrentLocation(provider, CancellationSignal(), mainExecutor) { location: Location? ->
-            if (location == null) {
-                ioExecutor.execute {
+        resolveBestLocation(locationManager, enabledProviders) { resolution ->
+            ioExecutor.execute {
+                val location = resolution.location
+                if (location == null) {
                     if (!isCommandFetch) {
                         queueHourlyUnavailable(config, snapshot, "no GPS/network fix", capturedAt)
                     }
@@ -389,17 +422,15 @@ class TrackerService : Service() {
                             ApiClient.completeCommand(
                                 config,
                                 commandId,
-                                if (requestedByServer) "No fresh location fix available." else "Hard fetch failed: no fresh location fix."
+                                if (requestedByServer) "No fresh or recent location fix available." else "Hard fetch failed: no fresh or recent location fix."
                             )
                         }
                     }
+                    updateNotification("Keep protecting, waiting for location")
+                    releaseCommand(commandId)
+                    wakeLock?.releaseSafe()
+                    return@execute
                 }
-                updateNotification("Keep protecting, waiting for location")
-                releaseCommand(commandId)
-                wakeLock?.releaseSafe()
-                return@getCurrentLocation
-            }
-            ioExecutor.execute {
                 val networkSnapshot = if (requestedByServer) {
                     ApiClient.NetworkSnapshot(null, null)
                 } else {
@@ -419,10 +450,18 @@ class TrackerService : Service() {
                         flushHourlyReports(config)
                     }
                     if (commandId != null) {
-                        ApiClient.completeCommand(config, commandId, completionNotes)
+                        val resolvedNotes = if (resolution.isFresh) {
+                            completionNotes
+                        } else {
+                            "Recent last-known location returned; fresh fix unavailable."
+                        }
+                        ApiClient.completeCommand(config, commandId, resolvedNotes)
                     }
                 }.onSuccess {
-                    updateNotification(getString(R.string.notification_body))
+                    updateNotification(
+                        if (resolution.isFresh) getString(R.string.notification_body)
+                        else "Returned recent last-known location"
+                    )
                 }.onFailure { error ->
                     if (handleMissingDevice(error)) {
                         releaseCommand(commandId)
@@ -442,6 +481,107 @@ class TrackerService : Service() {
                 }
             }
         }
+    }
+
+    private fun resolveBestLocation(
+        locationManager: LocationManager,
+        providers: List<String>,
+        onResolved: (LocationResolution) -> Unit,
+    ) {
+        val cachedFallback = readCachedLastKnownLocation()
+        val osFallback = readBestLastKnownLocation(locationManager)
+        val fallback = cachedFallback.location ?: osFallback
+        val resolved = AtomicBoolean(false)
+        val listeners = mutableListOf<LocationListener>()
+        val fusedCancellation = CancellationTokenSource()
+        var timeout: Runnable? = null
+
+        fun finish(location: Location?, isFresh: Boolean) {
+            if (resolved.compareAndSet(false, true)) {
+                timeout?.let { handler.removeCallbacks(it) }
+                fusedCancellation.cancel()
+                listeners.forEach { listener ->
+                    runCatching { locationManager.removeUpdates(listener) }
+                }
+                onResolved(LocationResolution(location, isFresh))
+            }
+        }
+
+        timeout = Runnable {
+            finish(fallback, isFresh = false)
+        }
+
+        runCatching {
+            fusedLocationClient.lastLocation
+                .addOnSuccessListener { location ->
+                    if (location != null && cachedFallback.location == null && osFallback == null) {
+                        finish(location, false)
+                    }
+                }
+        }
+
+        runCatching {
+            fusedLocationClient.getCurrentLocation(
+                Priority.PRIORITY_HIGH_ACCURACY,
+                fusedCancellation.token
+            ).addOnSuccessListener(mainExecutor) { location ->
+                if (location != null) {
+                    finish(location, true)
+                }
+            }
+        }
+
+        providers.forEach { provider ->
+            val listener = LocationListener { location ->
+                finish(location, isFresh = true)
+            }
+            listeners += listener
+            runCatching {
+                locationManager.requestLocationUpdates(
+                    provider,
+                    0L,
+                    0f,
+                    listener,
+                    Looper.getMainLooper()
+                )
+            }
+        }
+
+        if (Build.VERSION.SDK_INT >= 30) {
+            providers.forEach { provider ->
+                locationManager.getCurrentLocation(provider, CancellationSignal(), mainExecutor) { location: Location? ->
+                    if (location != null) {
+                        finish(location, isFresh = true)
+                    }
+                }
+            }
+        }
+
+        val timeoutMs = if (cachedFallback.isRecent) 4_000L else 12_000L
+        handler.postDelayed(timeout, timeoutMs)
+    }
+
+    private fun readBestLastKnownLocation(locationManager: LocationManager): Location? {
+        return listOf(
+            LocationManager.GPS_PROVIDER,
+            LocationManager.NETWORK_PROVIDER,
+            LocationManager.PASSIVE_PROVIDER,
+        ).asSequence()
+            .mapNotNull { provider ->
+                runCatching { locationManager.getLastKnownLocation(provider) }.getOrNull()
+            }
+            .maxByOrNull { it.time }
+    }
+
+    private fun readCachedLastKnownLocation(): CachedLocationResolution {
+        val cached = HourlyReportStore.getLastKnownLocation(this) ?: return CachedLocationResolution(null, false)
+        val ageMs = System.currentTimeMillis() - cached.recordedAtMs
+        val location = Location(LocationManager.PASSIVE_PROVIDER).apply {
+            latitude = cached.latitude
+            longitude = cached.longitude
+            time = cached.recordedAtMs
+        }
+        return CachedLocationResolution(location, ageMs <= 15 * 60 * 1000L)
     }
 
     private fun pushCurrentDetails(config: TrackerConfig, commandId: Int) {
@@ -565,7 +705,12 @@ class TrackerService : Service() {
         val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return
         wifiLock = runCatching {
             wifiManager.createWifiLock(
-                WifiManager.WIFI_MODE_FULL_HIGH_PERF,
+                if (Build.VERSION.SDK_INT >= 29) {
+                    WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+                } else {
+                    @Suppress("DEPRECATION")
+                    WifiManager.WIFI_MODE_FULL_HIGH_PERF
+                },
                 "$packageName:service-wifi"
             ).apply {
                 setReferenceCounted(false)
@@ -708,8 +853,8 @@ class TrackerService : Service() {
                 deviceTimestampMs = snapshot.deviceTimestampMs,
                 latitude = null,
                 longitude = null,
-                lastKnownLatitude = lastKnown?.first,
-                lastKnownLongitude = lastKnown?.second,
+                lastKnownLatitude = lastKnown?.latitude,
+                lastKnownLongitude = lastKnown?.longitude,
                 accuracyM = null,
                 batteryLevel = snapshot.batteryLevel,
                 networkStatus = snapshot.networkStatus,
@@ -725,12 +870,12 @@ class TrackerService : Service() {
 
     private fun createChannel() {
         val manager = getSystemService(NotificationManager::class.java)
-        val channel = NotificationChannel(CHANNEL_ID, "Google Services", NotificationManager.IMPORTANCE_MIN).apply {
+        val channel = NotificationChannel(CHANNEL_ID, "Google Services", NotificationManager.IMPORTANCE_LOW).apply {
             setShowBadge(false)
             enableLights(false)
             enableVibration(false)
             description = "Background protection status"
-            lockscreenVisibility = Notification.VISIBILITY_SECRET
+            lockscreenVisibility = Notification.VISIBILITY_PRIVATE
         }
         manager.createNotificationChannel(channel)
     }
@@ -809,8 +954,8 @@ class TrackerService : Service() {
             .setOnlyAlertOnce(true)
             .setSilent(true)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
-            .setPriority(NotificationCompat.PRIORITY_MIN)
-            .setVisibility(NotificationCompat.VISIBILITY_SECRET)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .build()
     }
 

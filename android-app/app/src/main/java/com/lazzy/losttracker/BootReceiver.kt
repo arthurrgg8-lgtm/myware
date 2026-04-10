@@ -3,7 +3,6 @@ package com.lazzy.losttracker
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import androidx.core.content.ContextCompat
 
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -13,7 +12,8 @@ class BootReceiver : BroadcastReceiver() {
         }
         val config = TrackerPrefs.load(context)
         if (config.deviceId != null) {
-            ContextCompat.startForegroundService(context, Intent(context, TrackerService::class.java))
+            TrackerServiceLauncher.start(context)
+            TrackerServiceLauncher.scheduleStartupFallback(context, delayMs = 20_000L)
         }
     }
 }

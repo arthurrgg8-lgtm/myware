@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="/home/lazzy/Desktop/myware"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_SCRIPT="$ROOT_DIR/launch-google-services.sh"
 TUNNEL_SCRIPT="$ROOT_DIR/launch-cloudflare-tunnel.sh"
 HOST_VALUE="${HOST:-127.0.0.1}"

@@ -24,25 +24,45 @@ data class HourlyReportEntry(
     val networkStatus: String,
 )
 
+data class LastKnownLocation(
+    val latitude: Double,
+    val longitude: Double,
+    val recordedAtMs: Long,
+)
+
 object HourlyReportStore {
     private const val PREFS_NAME = "lost_tracker_hourly_reports"
     private const val KEY_QUEUE = "queue"
     private const val KEY_RECORDED_PREFIX = "recorded_hour_"
+    private const val KEY_LAST_KNOWN_LATITUDE = "last_known_latitude"
+    private const val KEY_LAST_KNOWN_LONGITUDE = "last_known_longitude"
+    private const val KEY_LAST_KNOWN_RECORDED_AT_MS = "last_known_recorded_at_ms"
     private val hourFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd-HH")
 
-    fun saveLastKnownLocation(context: Context, latitude: Double, longitude: Double) {
+    fun saveLastKnownLocation(
+        context: Context,
+        latitude: Double,
+        longitude: Double,
+        recordedAtMs: Long = System.currentTimeMillis(),
+    ) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
-            .putString("last_known_latitude", latitude.toString())
-            .putString("last_known_longitude", longitude.toString())
+            .putString(KEY_LAST_KNOWN_LATITUDE, latitude.toString())
+            .putString(KEY_LAST_KNOWN_LONGITUDE, longitude.toString())
+            .putLong(KEY_LAST_KNOWN_RECORDED_AT_MS, recordedAtMs)
             .apply()
     }
 
-    fun getLastKnownLocation(context: Context): Pair<Double, Double>? {
+    fun getLastKnownLocation(context: Context): LastKnownLocation? {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val lat = prefs.getString("last_known_latitude", null)?.toDoubleOrNull()
-        val lon = prefs.getString("last_known_longitude", null)?.toDoubleOrNull()
-        return if (lat != null && lon != null) lat to lon else null
+        val lat = prefs.getString(KEY_LAST_KNOWN_LATITUDE, null)?.toDoubleOrNull()
+        val lon = prefs.getString(KEY_LAST_KNOWN_LONGITUDE, null)?.toDoubleOrNull()
+        val recordedAtMs = prefs.getLong(KEY_LAST_KNOWN_RECORDED_AT_MS, 0L)
+        return if (lat != null && lon != null && recordedAtMs > 0L) {
+            LastKnownLocation(lat, lon, recordedAtMs)
+        } else {
+            null
+        }
     }
 
     fun currentHourKey(capturedAt: String): String {

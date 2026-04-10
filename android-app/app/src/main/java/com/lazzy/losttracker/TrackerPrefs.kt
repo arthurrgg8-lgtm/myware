@@ -25,6 +25,7 @@ object TrackerPrefs {
     private const val KEY_DEVICE_ID = "device_id"
     private const val KEY_PUSH_TOKEN = "push_token"
     private const val KEY_BACKGROUND_PROMPT_SHOWN = "background_prompt_shown"
+    private const val KEY_NOTIFICATION_PROMPT_SHOWN = "notification_prompt_shown"
     private val LOCAL_HOSTS = setOf("127.0.0.1", "localhost", "::1")
 
     fun load(context: Context): TrackerConfig {
@@ -91,6 +92,18 @@ object TrackerPrefs {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
             .putBoolean(KEY_BACKGROUND_PROMPT_SHOWN, true)
+            .apply()
+    }
+
+    fun hasShownNotificationPrompt(context: Context): Boolean {
+        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getBoolean(KEY_NOTIFICATION_PROMPT_SHOWN, false)
+    }
+
+    fun markNotificationPromptShown(context: Context) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_NOTIFICATION_PROMPT_SHOWN, true)
             .apply()
     }
 

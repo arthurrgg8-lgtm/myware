@@ -142,6 +142,9 @@ function getDeviceStateMessage(device) {
   if (isDeviceLive(device)) {
     return "Connected";
   }
+  if (heartbeatTime && !isRecent(heartbeatTime, 6 * 60 * 60 * 1000)) {
+    return `Device unreachable since ${formatTime(heartbeatTime)}`;
+  }
   return heartbeatTime
     ? `Connection lost since ${formatTime(heartbeatTime)}`
     : "Connection lost";
@@ -151,7 +154,9 @@ function getLastKnownLocation(device) {
   if (device.lastLatitude == null || device.lastLongitude == null) {
     return "Last known location unavailable";
   }
-  return `Last known location: ${device.lastLatitude.toFixed(5)}, ${device.lastLongitude.toFixed(5)}`;
+  const lastPing = getLastLocationPing(device);
+  const suffix = lastPing ? ` • ${getFormattedRelativeAge(lastPing.createdAt)}` : "";
+  return `Last known location: ${device.lastLatitude.toFixed(5)}, ${device.lastLongitude.toFixed(5)}${suffix}`;
 }
 
 function getGoogleMapsUrl(device) {
@@ -182,11 +187,18 @@ function getOptionalDeviceValue(value) {
 }
 
 function getLocationSummary(device, stateMessage) {
+  const latestCompletion = getLatestCommandCompletion(device);
+  const completionNotes = String(latestCompletion?.notes || "").toLowerCase();
+  if (completionNotes.includes("recent last-known location returned")) {
+    return "Cached position returned";
+  }
   if (stateMessage !== "Connected") {
-    return stateMessage;
+    return device.lastLatitude != null && device.lastLongitude != null
+      ? "Device unreachable, showing last known position"
+      : stateMessage;
   }
   if (device.lastLatitude != null && device.lastLongitude != null) {
-    return `Live position • ${device.lastLatitude.toFixed(5)}, ${device.lastLongitude.toFixed(5)}`;
+    return `Current position • ${device.lastLatitude.toFixed(5)}, ${device.lastLongitude.toFixed(5)}`;
   }
   return "No location yet";
 }
@@ -234,6 +246,14 @@ function getLocationHealthLabel(device) {
   if (latestDisabled && (!device.locationServicesEnabled || isRecent(latestDisabled.createdAt, 6 * 60 * 60 * 1000))) {
     return `Location blocked since ${getFormattedRelativeAge(latestDisabled.createdAt)}`;
   }
+  const latestCompletion = getLatestCommandCompletion(device);
+  const completionNotes = String(latestCompletion?.notes || "").toLowerCase();
+  if (completionNotes.includes("recent last-known location returned")) {
+    return `Last request used cached location ${getFormattedRelativeAge(latestCompletion.createdAt)}`;
+  }
+  if (completionNotes.includes("no fresh or recent location fix available")) {
+    return `Last request missed a fix ${getFormattedRelativeAge(latestCompletion.createdAt)}`;
+  }
   const lastPing = getLastLocationPing(device);
   if (lastPing) {
     return `Last location ping ${getFormattedRelativeAge(lastPing.createdAt)}`;
@@ -253,6 +273,9 @@ function getCommandHealthLabel(device) {
   const requestTime = new Date(latestRequest.createdAt).getTime();
   const completionTime = new Date(latestCompletion.createdAt).getTime();
   if (completionTime >= requestTime) {
+    if (String(latestCompletion.notes || "").toLowerCase().includes("recent last-known location returned")) {
+      return `Last command used cached location ${getFormattedRelativeAge(latestCompletion.createdAt)}`;
+    }
     return `Last command completed ${getFormattedRelativeAge(latestCompletion.createdAt)}`;
   }
   return `Last command waiting since ${getFormattedRelativeAge(latestRequest.createdAt)}`;
@@ -373,7 +396,7 @@ function renderDevices() {
       node.querySelector(".device-banner-state").textContent = stateMessage;
       node.querySelector(".device-banner-time").textContent = getFormattedRelativeAge(heartbeatTime);
       const pill = node.querySelector(".status-pill");
-      pill.textContent = isHealthy ? "live" : "attention";
+      pill.textContent = isHealthy ? "connected" : "attention";
       pill.dataset.status = isHealthy ? "live" : "attention";
 
       node.querySelector(".device-stats").innerHTML = [
