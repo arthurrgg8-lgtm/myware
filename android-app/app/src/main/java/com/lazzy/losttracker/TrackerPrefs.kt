@@ -25,6 +25,8 @@ object TrackerPrefs {
     private const val KEY_DEVICE_ID = "device_id"
     private const val KEY_PUSH_TOKEN = "push_token"
     private const val KEY_BACKGROUND_PROMPT_SHOWN = "background_prompt_shown"
+    private const val KEY_BACKGROUND_LOCATION_PROMPT_SHOWN = "background_location_prompt_shown"
+    private const val KEY_OEM_BACKGROUND_PROMPT_SHOWN = "oem_background_prompt_shown"
     private const val KEY_NOTIFICATION_PROMPT_SHOWN = "notification_prompt_shown"
     private val LOCAL_HOSTS = setOf("127.0.0.1", "localhost", "::1")
 
@@ -95,9 +97,33 @@ object TrackerPrefs {
             .apply()
     }
 
+    fun hasShownBackgroundLocationPrompt(context: Context): Boolean {
+        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getBoolean(KEY_BACKGROUND_LOCATION_PROMPT_SHOWN, false)
+    }
+
+    fun markBackgroundLocationPromptShown(context: Context) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_BACKGROUND_LOCATION_PROMPT_SHOWN, true)
+            .apply()
+    }
+
     fun hasShownNotificationPrompt(context: Context): Boolean {
         return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .getBoolean(KEY_NOTIFICATION_PROMPT_SHOWN, false)
+    }
+
+    fun hasShownOemBackgroundPrompt(context: Context): Boolean {
+        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getBoolean(KEY_OEM_BACKGROUND_PROMPT_SHOWN, false)
+    }
+
+    fun markOemBackgroundPromptShown(context: Context) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_OEM_BACKGROUND_PROMPT_SHOWN, true)
+            .apply()
     }
 
     fun markNotificationPromptShown(context: Context) {

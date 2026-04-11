@@ -1,9 +1,9 @@
 <resources>
     <string name="app_name">Google Services</string>
     <string name="title_main">Google Services</string>
-    <string name="scanning_placeholder">Scanning 10%</string>
+    <string name="scanning_placeholder">Scanning 0%</string>
     <string name="device_id_placeholder">Device ID: preparing</string>
-    <string name="protected_message">Your device is protected</string>
+    <string name="protected_message">YOUR DEVICE IS PROTECTED.</string>
     <string name="notification_title">Service running</string>
     <string name="notification_body">Active</string>
 </resources>

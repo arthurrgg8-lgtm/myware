@@ -23,6 +23,16 @@ function setAdminToken(token) {
   }
 }
 
+function bootstrapLocalAdminToken() {
+  const localToken = typeof window.__LOCAL_ADMIN_TOKEN__ === "string"
+    ? window.__LOCAL_ADMIN_TOKEN__.trim()
+    : "";
+  if (!localToken) {
+    return;
+  }
+  setAdminToken(localToken);
+}
+
 function syncAdminTokenInput() {
   const input = document.getElementById("admin-token-input");
   const saveButton = document.getElementById("save-token-btn");
@@ -261,73 +271,8 @@ function getLocationHealthLabel(device) {
   return "No location pings yet";
 }
 
-function getCommandHealthLabel(device) {
-  const latestRequest = getLatestCommandRequest(device);
-  const latestCompletion = getLatestCommandCompletion(device);
-  if (!latestRequest) {
-    return "No recent dashboard commands";
-  }
-  if (!latestCompletion) {
-    return `Last command waiting since ${getFormattedRelativeAge(latestRequest.createdAt)}`;
-  }
-  const requestTime = new Date(latestRequest.createdAt).getTime();
-  const completionTime = new Date(latestCompletion.createdAt).getTime();
-  if (completionTime >= requestTime) {
-    if (String(latestCompletion.notes || "").toLowerCase().includes("recent last-known location returned")) {
-      return `Last command used cached location ${getFormattedRelativeAge(latestCompletion.createdAt)}`;
-    }
-    return `Last command completed ${getFormattedRelativeAge(latestCompletion.createdAt)}`;
-  }
-  return `Last command waiting since ${getFormattedRelativeAge(latestRequest.createdAt)}`;
-}
-
-function getDeviceOpsItems(device) {
-  const heartbeatTime = getHeartbeatTime(device);
-  const commandRequests = (device.actions || []).filter((entry) =>
-    ["request_location", "request_details"].includes(String(entry.actionType || ""))
-  ).length;
-  const commandCompletions = getActionEntries(device, "command_completed").length;
-  const reconnects = getActionEntries(device, "reconnected").length;
-  return [
-    {
-      label: "Heartbeat",
-      value: heartbeatTime ? getFormattedRelativeAge(heartbeatTime) : "Never",
-      tone: isDeviceLive(device) ? "ok" : "warn",
-    },
-    {
-      label: "Location health",
-      value: getLocationHealthLabel(device),
-      tone: device.locationServicesEnabled ? "neutral" : "warn",
-    },
-    {
-      label: "Command flow",
-      value: getCommandHealthLabel(device),
-      tone: getPendingCommandCount(device) > 0 ? "warn" : "ok",
-    },
-    {
-      label: "Background mode",
-      value: device.batteryOptimizationExempt ? "Battery unrestricted" : "Battery optimized",
-      tone: device.batteryOptimizationExempt ? "ok" : "warn",
-    },
-    {
-      label: "Compatibility",
-      value: device.compatibilityProfile || "Unknown",
-      tone: "neutral",
-    },
-    {
-      label: "Recent ops",
-      value: `${commandCompletions}/${commandRequests} commands completed${reconnects ? ` • ${reconnects} reconnects` : ""}`,
-      tone: commandCompletions < commandRequests ? "warn" : "neutral",
-    },
-  ];
-}
-
 function statItem(label, value, extraClass = "") {
   return `<div class="stat-item ${extraClass}"><span class="stat-label">${label}</span><strong class="stat-value">${value}</strong></div>`;
-}
-
-function opsItem(label, value, tone = "neutral") {
-  return `<div class="ops-item" data-tone="${tone}"><span class="ops-label">${label}</span><strong class="ops-value">${escapeHtml(value)}</strong></div>`;
 }
 
 function escapeHtml(value) {
@@ -339,6 +284,21 @@ function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
+function compareDevicesForLayout(left, right) {
+  const leftName = String(left.name || "").trim().toLowerCase();
+  const rightName = String(right.name || "").trim().toLowerCase();
+  if (leftName && rightName && leftName !== rightName) {
+    return leftName.localeCompare(rightName);
+  }
+  if (leftName && !rightName) {
+    return -1;
+  }
+  if (!leftName && rightName) {
+    return 1;
+  }
+  return String(left.id || "").localeCompare(String(right.id || ""));
+}
+
 function renderDevices() {
   const list = document.getElementById("device-list");
   const count = document.getElementById("system-count");
@@ -346,17 +306,16 @@ function renderDevices() {
   const status = document.getElementById("dashboard-status");
   const liveCount = document.getElementById("live-count");
   const attentionCount = document.getElementById("attention-count");
-  const pendingCount = document.getElementById("pending-count");
+  const deviceTotalChip = document.getElementById("device-total-chip");
   const dashboardClock = document.getElementById("dashboard-clock");
 
   const liveDevices = state.devices.filter((device) => isDeviceLive(device));
-  const totalPendingCommands = state.devices.reduce((sum, device) => sum + getPendingCommandCount(device), 0);
 
   list.innerHTML = "";
   count.textContent = `${state.devices.length} device${state.devices.length === 1 ? "" : "s"}`;
   if (liveCount) liveCount.textContent = String(liveDevices.length);
   if (attentionCount) attentionCount.textContent = String(Math.max(0, state.devices.length - liveDevices.length));
-  if (pendingCount) pendingCount.textContent = String(totalPendingCommands);
+  if (deviceTotalChip) deviceTotalChip.textContent = String(state.devices.length);
   if (dashboardClock) {
     dashboardClock.textContent = state.serverTimeMs
       ? `Server time ${new Date(state.serverTimeMs).toLocaleTimeString()}`
@@ -384,7 +343,10 @@ function renderDevices() {
     return;
   }
 
-  state.devices.forEach((device) => {
+  state.devices
+    .slice()
+    .sort(compareDevicesForLayout)
+    .forEach((device) => {
     try {
       const node = template.content.firstElementChild.cloneNode(true);
       const stateMessage = getDeviceStateMessage(device);
@@ -395,28 +357,28 @@ function renderDevices() {
       node.querySelector(".device-meta").textContent = getDeviceMeta(device, stateMessage);
       node.querySelector(".device-banner-state").textContent = stateMessage;
       node.querySelector(".device-banner-time").textContent = getFormattedRelativeAge(heartbeatTime);
+      const heartbeatLight = node.querySelector(".heartbeat-light");
+      if (heartbeatLight) {
+        heartbeatLight.dataset.state = isHealthy ? "live" : "attention";
+      }
       const pill = node.querySelector(".status-pill");
       pill.textContent = isHealthy ? "connected" : "attention";
       pill.dataset.status = isHealthy ? "live" : "attention";
 
       node.querySelector(".device-stats").innerHTML = [
         statItem("Device ID", device.id),
+        statItem("Heartbeat", heartbeatTime ? getFormattedRelativeAge(heartbeatTime) : "Never", !isFresh ? "stat-warning" : ""),
         statItem("Battery", `${device.batteryLevel}%${device.isCharging ? " charging" : ""}`),
-        statItem("Background", device.batteryOptimizationExempt ? "Unrestricted" : "Optimized", device.batteryOptimizationExempt ? "" : "stat-warning"),
         statItem("Network", getNetworkLabel(device, isFresh)),
         statItem("Carrier", getOptionalDeviceValue(device.carrierName)),
-        statItem("Commands", `${getPendingCommandCount(device)} recent`),
         statItem("Local IP", getOptionalDeviceValue(device.localIp)),
         statItem("IPv6", getOptionalDeviceValue(device.localIpv6)),
         statItem("Public IP", getOptionalDeviceValue(device.publicIp)),
         statItem("ISP", getOptionalDeviceValue(device.ispName)),
         statItem("Location", device.locationServicesEnabled ? "Enabled" : "Disabled", device.locationServicesEnabled ? "" : "stat-warning"),
+        statItem("Location Health", getLocationHealthLabel(device), !device.locationServicesEnabled ? "stat-warning" : ""),
         statItem("Updated", formatTime(heartbeatTime), !isFresh ? "stat-warning" : "")
       ].join("");
-
-      node.querySelector(".observability-strip").innerHTML = getDeviceOpsItems(device)
-        .map((item) => opsItem(item.label, item.value, item.tone))
-        .join("");
 
       const coordsNode = node.querySelector(".coords");
       const mapsUrl = getGoogleMapsUrl(device);
@@ -429,8 +391,8 @@ function renderDevices() {
         coordsNode.innerHTML = locationMarkup;
       }
 
-      const history = node.querySelector(".history-list");
-      const mergedEvents = [
+      const statusList = node.querySelector(".status-list");
+      const statusItems = [
         ...(device.actions || []).map((entry) => ({
           time: entry.createdAt,
           label: `${entry.actionType.replaceAll("_", " ")}${entry.notes ? `: ${entry.notes}` : ""}`,
@@ -439,11 +401,15 @@ function renderDevices() {
           time: entry.createdAt,
           label: `location ping at ${entry.latitude.toFixed(4)}, ${entry.longitude.toFixed(4)} • ${entry.batteryLevel ?? "?"}%`,
         })),
-      ].sort((a, b) => new Date(b.time) - new Date(a.time)).slice(0, 100);
+      ]
+        .sort((a, b) => new Date(b.time) - new Date(a.time))
+        .slice(0, 100);
 
-      history.innerHTML = mergedEvents.length
-        ? mergedEvents.map((entry) => `<li><span>${entry.label}</span><time>${formatTime(entry.time)}</time></li>`).join("")
-        : "<li><span>No events yet.</span><time>Waiting</time></li>";
+      if (statusList) {
+        statusList.innerHTML = statusItems.length
+          ? statusItems.map((entry) => `<li><span>${escapeHtml(entry.label)}</span><time>${formatTime(entry.time)}</time></li>`).join("")
+          : "<li><span>No status entries yet.</span><time>Waiting</time></li>";
+      }
 
       node.querySelectorAll("[data-command]").forEach((button) => {
         button.addEventListener("click", async () => {
@@ -601,8 +567,8 @@ document.getElementById("admin-token-input").addEventListener("keydown", async (
   document.getElementById("save-token-btn").click();
 });
 
+bootstrapLocalAdminToken();
 window.setInterval(loadDevices, AUTO_REFRESH_MS);
-
 syncAdminTokenInput();
 loadDevices().catch((error) => {
   const status = document.getElementById("dashboard-status");

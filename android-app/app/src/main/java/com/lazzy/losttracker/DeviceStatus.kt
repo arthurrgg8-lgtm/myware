@@ -6,6 +6,7 @@ import android.content.IntentFilter
 import android.net.ConnectivityManager
 import android.net.LinkAddress
 import android.net.NetworkCapabilities
+import android.net.wifi.SupplicantState
 import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
 import android.os.BatteryManager
@@ -150,6 +151,21 @@ object DeviceStatus {
         val ssid = sanitizeSsid(ssidFromTransport)
         if (ssid != null) {
             return ssid
+        }
+        val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+        val fallbackSsid = runCatching {
+            @Suppress("DEPRECATION")
+            wifiManager?.connectionInfo
+                ?.takeIf {
+                    it.networkId != -1 &&
+                        it.supplicantState == SupplicantState.COMPLETED &&
+                        !it.bssid.isNullOrBlank()
+                }
+                ?.ssid
+                ?.let(::sanitizeSsid)
+        }.getOrNull()
+        if (fallbackSsid != null) {
+            return fallbackSsid
         }
         return readCachedWifiSsid(context)
     }

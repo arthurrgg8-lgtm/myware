@@ -161,29 +161,38 @@ object ApiClient {
         authenticated: Boolean = true
     ): JSONObject {
         val connection = URL(endpoint).openConnection() as HttpURLConnection
-        connection.requestMethod = method
-        connection.connectTimeout = connectTimeoutMs
-        connection.readTimeout = readTimeoutMs
-        connection.setRequestProperty("Content-Type", "application/json")
-        if (authenticated && BuildConfig.TRACKER_API_TOKEN.isNotBlank()) {
-            connection.setRequestProperty("X-Tracker-Device-Token", BuildConfig.TRACKER_API_TOKEN)
-        }
-        connection.doInput = true
-
-        if (payload != null) {
-            connection.doOutput = true
-            OutputStreamWriter(connection.outputStream).use { it.write(payload.toString()) }
-        }
-
-        val stream = if (connection.responseCode in 200..299) connection.inputStream else connection.errorStream
-        val body = BufferedReader(stream.reader()).use { it.readText() }
-        if (connection.responseCode !in 200..299) {
-            if (connection.responseCode == 404 && body.contains("device not found", ignoreCase = true)) {
-                throw DeviceNotFoundException(body.ifBlank { "Device not found" })
+        try {
+            connection.requestMethod = method
+            connection.connectTimeout = connectTimeoutMs
+            connection.readTimeout = readTimeoutMs
+            connection.setRequestProperty("Content-Type", "application/json")
+            if (authenticated && BuildConfig.TRACKER_API_TOKEN.isNotBlank()) {
+                connection.setRequestProperty("X-Tracker-Device-Token", BuildConfig.TRACKER_API_TOKEN)
             }
-            throw IllegalStateException(body.ifBlank { "Request failed with ${connection.responseCode}" })
+            connection.doInput = true
+
+            if (payload != null) {
+                connection.doOutput = true
+                OutputStreamWriter(connection.outputStream).use { it.write(payload.toString()) }
+            }
+
+            val responseCode = connection.responseCode
+            val stream = if (responseCode in 200..299) {
+                connection.inputStream
+            } else {
+                connection.errorStream ?: connection.inputStream
+            }
+            val body = BufferedReader(stream.reader()).use { it.readText() }
+            if (responseCode !in 200..299) {
+                if (responseCode == 404 && body.contains("device not found", ignoreCase = true)) {
+                    throw DeviceNotFoundException(body.ifBlank { "Device not found" })
+                }
+                throw IllegalStateException(body.ifBlank { "Request failed with $responseCode" })
+            }
+            return JSONObject(body)
+        } finally {
+            connection.disconnect()
         }
-        return JSONObject(body)
     }
 
     private fun buildLocationPayload(

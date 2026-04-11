@@ -208,6 +208,37 @@ class BackendServerTests(unittest.TestCase):
         self.assertIn("success", csv_text)
         self.assertIn("attachment;", response_headers.get("Content-Disposition", ""))
 
+    def test_admin_can_rename_device(self):
+        _, device = self.request_json(
+            "/api/devices",
+            method="POST",
+            payload={
+                "name": "Rename Phone",
+                "ownerEmail": "rename@test.local",
+                "platform": "android",
+                "deviceToken": "device-token-4",
+            },
+            headers={"X-Tracker-Device-Token": self.device_token},
+        )
+        device_id = device["device"]["id"]
+
+        status, renamed = self.request_json(
+            f"/api/devices/{device_id}/rename",
+            method="POST",
+            payload={"name": "Field Unit Alpha"},
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(renamed["ok"])
+        self.assertEqual(renamed["device"]["name"], "Field Unit Alpha")
+
+        status, refreshed = self.request_json(
+            f"/api/devices/{device_id}",
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(refreshed["device"]["name"], "Field Unit Alpha")
+
 
 if __name__ == "__main__":
     unittest.main()

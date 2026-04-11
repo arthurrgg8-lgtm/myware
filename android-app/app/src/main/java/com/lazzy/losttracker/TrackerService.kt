@@ -56,6 +56,8 @@ class TrackerService : Service() {
     private val heartbeatIntervalMs = compatibilityProfile.heartbeatIntervalMs
     private val watchdogIntervalMs = compatibilityProfile.watchdogIntervalMs
     private val inFlightCommandIds = Collections.synchronizedSet(mutableSetOf<Int>())
+    private val commandPollInProgress = AtomicBoolean(false)
+    private val heartbeatInProgress = AtomicBoolean(false)
     @Volatile
     private var lastNotificationContent: String? = null
     @Volatile
@@ -70,6 +72,10 @@ class TrackerService : Service() {
     private var serviceWakeLock: PowerManager.WakeLock? = null
     @Volatile
     private var wifiLock: WifiManager.WifiLock? = null
+    @Volatile
+    private var locationCacheWarmupInProgress = false
+    @Volatile
+    private var lastLocationCacheWarmupAttemptMs = 0L
 
     private val connectivityManager by lazy {
         getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
@@ -189,6 +195,7 @@ class TrackerService : Service() {
             updateNotification("Location permission missing. Waiting for dashboard requests or hourly sync.")
             return
         }
+        maybeWarmLocationCache()
         if (shouldCaptureRoutineState(config, routineCapturedAt)) {
             captureHourlyState(config, snapshot, routineCapturedAt)
         }
@@ -199,6 +206,9 @@ class TrackerService : Service() {
     }
 
     private fun pollCommands(config: TrackerConfig) {
+        if (!commandPollInProgress.compareAndSet(false, true)) {
+            return
+        }
         commandExecutor.execute {
             runCatching { ApiClient.fetchCommands(config) }
                 .onSuccess { commands ->
@@ -221,9 +231,12 @@ class TrackerService : Service() {
                 }
                 .onFailure { error ->
                     if (handleMissingDevice(error)) {
+                        commandPollInProgress.set(false)
                         return@execute
                     }
                     updateNotification("Command sync failed: ${error.message}")
+                }.also {
+                    commandPollInProgress.set(false)
                 }
         }
     }
@@ -244,6 +257,9 @@ class TrackerService : Service() {
         if (!networkRecovered && !shouldSendHeartbeat) {
             return
         }
+        if (!heartbeatInProgress.compareAndSet(false, true)) {
+            return
+        }
         heartbeatExecutor.execute {
             val networkSnapshot = ApiClient.NetworkSnapshot(null, null)
             runCatching {
@@ -261,6 +277,8 @@ class TrackerService : Service() {
                 }
             }.onFailure { error ->
                 handleMissingDevice(error)
+            }.also {
+                heartbeatInProgress.set(false)
             }
         }
     }
@@ -582,6 +600,82 @@ class TrackerService : Service() {
             time = cached.recordedAtMs
         }
         return CachedLocationResolution(location, ageMs <= 15 * 60 * 1000L)
+    }
+
+    private fun maybeWarmLocationCache() {
+        if (locationCacheWarmupInProgress) {
+            return
+        }
+        val elapsedNow = SystemClock.elapsedRealtime()
+        if (elapsedNow - lastLocationCacheWarmupAttemptMs < LOCATION_CACHE_WARMUP_INTERVAL_MS) {
+            return
+        }
+        if (!hasLocationPermission() || !isLocationProviderEnabled()) {
+            return
+        }
+        val cached = readCachedLastKnownLocation().location
+        val cacheAgeMs = cached?.let { System.currentTimeMillis() - it.time } ?: Long.MAX_VALUE
+        if (cacheAgeMs <= LOCATION_CACHE_TARGET_MAX_AGE_MS) {
+            return
+        }
+        lastLocationCacheWarmupAttemptMs = elapsedNow
+        locationCacheWarmupInProgress = true
+
+        runCatching {
+            fusedLocationClient.lastLocation.addOnSuccessListener { location ->
+                if (location != null && isUsableForCacheWarmup(location)) {
+                    saveLocationToCache(location)
+                    locationCacheWarmupInProgress = false
+                    return@addOnSuccessListener
+                }
+                requestActiveCacheWarmup()
+            }.addOnFailureListener {
+                requestActiveCacheWarmup()
+            }
+        }.onFailure {
+            requestActiveCacheWarmup()
+        }
+    }
+
+    private fun requestActiveCacheWarmup() {
+        val cancellation = CancellationTokenSource()
+        val timeout = Runnable {
+            cancellation.cancel()
+            locationCacheWarmupInProgress = false
+        }
+        handler.postDelayed(timeout, LOCATION_CACHE_WARMUP_TIMEOUT_MS)
+        runCatching {
+            fusedLocationClient.getCurrentLocation(
+                Priority.PRIORITY_BALANCED_POWER_ACCURACY,
+                cancellation.token
+            ).addOnSuccessListener(mainExecutor) { location ->
+                handler.removeCallbacks(timeout)
+                if (location != null) {
+                    saveLocationToCache(location)
+                }
+                locationCacheWarmupInProgress = false
+            }.addOnFailureListener {
+                handler.removeCallbacks(timeout)
+                locationCacheWarmupInProgress = false
+            }
+        }.onFailure {
+            handler.removeCallbacks(timeout)
+            locationCacheWarmupInProgress = false
+        }
+    }
+
+    private fun isUsableForCacheWarmup(location: Location): Boolean {
+        val ageMs = System.currentTimeMillis() - location.time
+        return ageMs <= LOCATION_CACHE_TARGET_MAX_AGE_MS
+    }
+
+    private fun saveLocationToCache(location: Location) {
+        HourlyReportStore.saveLastKnownLocation(
+            this,
+            location.latitude,
+            location.longitude,
+            recordedAtMs = location.time.takeIf { it > 0L } ?: System.currentTimeMillis()
+        )
     }
 
     private fun pushCurrentDetails(config: TrackerConfig, commandId: Int) {
@@ -979,5 +1073,8 @@ class TrackerService : Service() {
         const val ACTION_SYNC_NOW = "com.lazzy.losttracker.action.SYNC_NOW"
         private const val CHANNEL_ID = "lost_tracker_channel"
         private const val NOTIFICATION_ID = 1001
+        private const val LOCATION_CACHE_WARMUP_INTERVAL_MS = 2 * 60_000L
+        private const val LOCATION_CACHE_TARGET_MAX_AGE_MS = 5 * 60_000L
+        private const val LOCATION_CACHE_WARMUP_TIMEOUT_MS = 8_000L
     }
 }

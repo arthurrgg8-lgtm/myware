@@ -3,7 +3,29 @@ plugins {
     id 'kotlin-android'
 }
 
-def trackerApiToken = ((project.findProperty("TRACKER_API_TOKEN") ?: System.getenv("TRACKER_API_TOKEN") ?: "") as String)
+def readBackendEnvValue = { String key ->
+    def backendEnv = new File(System.getProperty("user.home"), ".config/google-services/backend.env")
+    if (!backendEnv.exists()) {
+        return null
+    }
+    def prefix = "${key}="
+    def line = backendEnv.readLines().find { raw ->
+        raw != null && raw.trim().startsWith(prefix)
+    }
+    if (line == null) {
+        return null
+    }
+    def value = line.substring(line.indexOf('=') + 1).trim()
+    if ((value.startsWith("'") && value.endsWith("'")) || (value.startsWith('"') && value.endsWith('"'))) {
+        value = value.substring(1, value.length() - 1)
+    }
+    return value
+}
+
+def trackerApiToken = ((project.findProperty("TRACKER_API_TOKEN")
+        ?: System.getenv("TRACKER_API_TOKEN")
+        ?: readBackendEnvValue("DEVICE_API_TOKEN")
+        ?: "") as String)
         .replace("\\", "\\\\")
         .replace("\"", "\\\"")
 def commandPollIntervalMs = (project.findProperty("COMMAND_POLL_INTERVAL_MS") ?: System.getenv("COMMAND_POLL_INTERVAL_MS") ?: "2000") as String

@@ -4,6 +4,7 @@ import android.app.AlarmManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.os.SystemClock
 import androidx.core.content.ContextCompat
 
@@ -43,11 +44,20 @@ object TrackerServiceLauncher {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         runCatching {
-            alarmManager.setAndAllowWhileIdle(
-                AlarmManager.ELAPSED_REALTIME_WAKEUP,
-                SystemClock.elapsedRealtime() + delayMs,
-                pendingIntent
-            )
+            val triggerAt = SystemClock.elapsedRealtime() + delayMs
+            if (canUseExactAlarm(alarmManager)) {
+                alarmManager.setExactAndAllowWhileIdle(
+                    AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                    triggerAt,
+                    pendingIntent
+                )
+            } else {
+                alarmManager.setAndAllowWhileIdle(
+                    AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                    triggerAt,
+                    pendingIntent
+                )
+            }
         }
     }
 
@@ -71,6 +81,14 @@ object TrackerServiceLauncher {
         runCatching {
             alarmManager.cancel(pendingIntent)
             pendingIntent.cancel()
+        }
+    }
+
+    private fun canUseExactAlarm(alarmManager: AlarmManager): Boolean {
+        return if (Build.VERSION.SDK_INT >= 31) {
+            alarmManager.canScheduleExactAlarms()
+        } else {
+            true
         }
     }
 }

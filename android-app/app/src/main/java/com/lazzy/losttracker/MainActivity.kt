@@ -22,6 +22,12 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
+    private enum class SettingsPromptTarget {
+        BACKGROUND_LOCATION,
+        BATTERY_OPTIMIZATION,
+        OEM_BACKGROUND_SETTINGS,
+    }
+
     private lateinit var scanningText: TextView
     private lateinit var deviceIdText: TextView
     private lateinit var protectionText: TextView
@@ -30,9 +36,12 @@ class MainActivity : AppCompatActivity() {
     private var autoSetupStarted = false
     private var permissionRequestInFlight = false
     private var batterySettingsInFlight = false
+    private var backgroundLocationSettingsInFlight = false
+    private var oemBackgroundSettingsInFlight = false
     private var introAnimationShown = false
     private var introAnimationRunning = false
     private var trackingServiceStartRequested = false
+    private var settingsPromptTarget: SettingsPromptTarget? = null
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -43,8 +52,26 @@ class MainActivity : AppCompatActivity() {
     }
 
     private val settingsLauncher = registerForActivityResult(StartActivityForResult()) {
-        batterySettingsInFlight = false
-        TrackerPrefs.markBackgroundPromptShown(this)
+        when (settingsPromptTarget) {
+            SettingsPromptTarget.BACKGROUND_LOCATION -> {
+                backgroundLocationSettingsInFlight = false
+                TrackerPrefs.markBackgroundLocationPromptShown(this)
+            }
+            SettingsPromptTarget.BATTERY_OPTIMIZATION -> {
+                batterySettingsInFlight = false
+                TrackerPrefs.markBackgroundPromptShown(this)
+            }
+            SettingsPromptTarget.OEM_BACKGROUND_SETTINGS -> {
+                oemBackgroundSettingsInFlight = false
+                TrackerPrefs.markOemBackgroundPromptShown(this)
+            }
+            null -> {
+                batterySettingsInFlight = false
+                backgroundLocationSettingsInFlight = false
+                oemBackgroundSettingsInFlight = false
+            }
+        }
+        settingsPromptTarget = null
         refreshSummary()
         driveAutomaticSetup()
     }
@@ -82,15 +109,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun refreshSummary() {
         val config = TrackerPrefs.load(this)
-        val compatibilityProfile = DeviceCompatibility.currentProfile()
         deviceIdText.text = "Device ID: ${config.deviceId ?: "preparing"}"
-        protectionText.text = buildString {
-            append("Your device is protected")
-            append('\n')
-            append("Profile: ${compatibilityProfile.name}")
-            append('\n')
-            append(compatibilityProfile.guidance)
-        }
+        protectionText.text = "YOUR DEVICE IS PROTECTED."
     }
 
     private fun updateStableVisibility() {
@@ -160,7 +180,9 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     autoSetupStarted = false
                     refreshSummary()
-                    updateStableVisibility()
+                    if (!introAnimationRunning) {
+                        updateStableVisibility()
+                    }
                     driveAutomaticSetup()
                 }
             }.onFailure { error ->
@@ -204,6 +226,10 @@ class MainActivity : AppCompatActivity() {
     private fun requestAllRequiredAccess() {
         if (!hasForegroundLocationPermission()) {
             requestRuntimePermissions()
+            return
+        }
+        if (!hasBackgroundLocationAccess()) {
+            requestBackgroundLocationAccess()
         }
     }
 
@@ -216,10 +242,18 @@ class MainActivity : AppCompatActivity() {
                     enrollDevice()
                 }
             }
-            !hasTrackingAccess() -> requestAllRequiredAccess()
             else -> {
                 deviceIdText.post {
                     startTrackingService()
+                    if (!hasTrackingAccess()) {
+                        requestAllRequiredAccess()
+                    } else {
+                        when {
+                            !hasBackgroundLocationAccess() -> requestBackgroundLocationAccess()
+                            shouldPromptBatteryOptimizationExemption() -> requestBatteryOptimizationExemption()
+                            else -> requestOemBackgroundSettings()
+                        }
+                    }
                 }
             }
         }
@@ -233,6 +267,7 @@ class MainActivity : AppCompatActivity() {
             !TrackerPrefs.hasShownBackgroundPrompt(this)
         ) {
             batterySettingsInFlight = true
+            settingsPromptTarget = SettingsPromptTarget.BATTERY_OPTIMIZATION
             TrackerPrefs.markBackgroundPromptShown(this)
             val requestIntent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
                 data = Uri.parse("package:$packageName")
@@ -246,6 +281,32 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun shouldPromptBatteryOptimizationExemption(): Boolean {
+        return !hasBatteryOptimizationExemption() &&
+            !batterySettingsInFlight &&
+            !TrackerPrefs.hasShownBackgroundPrompt(this)
+    }
+
+    private fun requestOemBackgroundSettings() {
+        if (
+            !OemBackgroundSettings.shouldPrompt() ||
+            oemBackgroundSettingsInFlight ||
+            TrackerPrefs.hasShownOemBackgroundPrompt(this)
+        ) {
+            return
+        }
+        val intent = OemBackgroundSettings.createIntent(this) ?: return
+        oemBackgroundSettingsInFlight = true
+        settingsPromptTarget = SettingsPromptTarget.OEM_BACKGROUND_SETTINGS
+        runCatching {
+            settingsLauncher.launch(intent)
+        }.onFailure {
+            oemBackgroundSettingsInFlight = false
+            settingsPromptTarget = null
+            TrackerPrefs.markOemBackgroundPromptShown(this)
+        }
+    }
+
     private fun hasBatteryOptimizationExemption(): Boolean {
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         return powerManager.isIgnoringBatteryOptimizations(packageName)
@@ -255,6 +316,40 @@ class MainActivity : AppCompatActivity() {
         val fine = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
         val coarse = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION)
         return fine == PackageManager.PERMISSION_GRANTED || coarse == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun hasBackgroundLocationAccess(): Boolean {
+        if (Build.VERSION.SDK_INT < 29) {
+            return true
+        }
+        return ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.ACCESS_BACKGROUND_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun requestBackgroundLocationAccess() {
+        if (!hasForegroundLocationPermission()) {
+            return
+        }
+        when {
+            Build.VERSION.SDK_INT < 29 -> return
+            Build.VERSION.SDK_INT == 29 -> {
+                if (!permissionRequestInFlight && !hasBackgroundLocationAccess()) {
+                    permissionRequestInFlight = true
+                    permissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION))
+                }
+            }
+            !backgroundLocationSettingsInFlight &&
+                !TrackerPrefs.hasShownBackgroundLocationPrompt(this) -> {
+                backgroundLocationSettingsInFlight = true
+                settingsPromptTarget = SettingsPromptTarget.BACKGROUND_LOCATION
+                val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                    data = Uri.parse("package:$packageName")
+                }
+                settingsLauncher.launch(intent)
+            }
+        }
     }
 
     private fun hasNotificationPermission(): Boolean {

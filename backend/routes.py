@@ -21,6 +21,11 @@ from fcm import send_fcm_wakeup
 logger = logging.getLogger("tracker.routes")
 
 
+def is_local_dashboard_host(handler: BaseHTTPRequestHandler) -> bool:
+    host = (handler.headers.get("Host") or "").split(":", 1)[0].strip().lower()
+    return host in {"127.0.0.1", "localhost"}
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -102,6 +107,14 @@ class TrackerHandler(BaseHTTPRequestHandler):
         if not path.exists():
             return self.send_error(HTTPStatus.NOT_FOUND, "Missing static file")
         data = path.read_bytes()
+        if filename == "index.html":
+            bootstrap_token = ""
+            if is_local_dashboard_host(self) and SETTINGS.admin_token:
+                bootstrap_token = SETTINGS.admin_token
+            data = data.replace(
+                b"__LOCAL_ADMIN_TOKEN_VALUE__",
+                json.dumps(bootstrap_token).encode("utf-8"),
+            )
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", content_type)
         self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
@@ -154,6 +167,8 @@ class TrackerHandler(BaseHTTPRequestHandler):
                 return self.record_action(device_id)
             if action == "commands":
                 return self.create_command(device_id)
+            if action == "rename":
+                return self.rename_device(device_id)
         if len(parts) == 6 and parts[3] == "commands" and parts[5] == "complete":
             return self.complete_command(parts[2], parts[4])
         return self.send_error(HTTPStatus.NOT_FOUND, "Unknown device action")
@@ -565,6 +580,42 @@ class TrackerHandler(BaseHTTPRequestHandler):
                 },
                 status=201,
             )
+        finally:
+            conn.close()
+
+    def rename_device(self, device_id: str) -> None:
+        payload = parse_json(self)
+        next_name = " ".join(str(payload.get("name") or "").strip().split())
+        if not next_name:
+            return json_response(self, {"error": "name is required"}, status=400)
+        if len(next_name) > 120:
+            return json_response(self, {"error": "name must be 120 characters or fewer"}, status=400)
+
+        timestamp = now_iso()
+        conn = get_db()
+        try:
+            row = resolve_device_row(conn, device_id)
+            if not row:
+                return json_response(self, {"error": "device not found"}, status=404)
+            device_pk = row["id"]
+            current_name = (row["name"] or "").strip()
+            if current_name == next_name:
+                return json_response(self, {"ok": True, "device": row_to_device(row), "unchanged": True})
+
+            conn.execute(
+                "UPDATE devices SET name = ?, updated_at = ? WHERE id = ?",
+                (next_name, timestamp, device_pk),
+            )
+            conn.execute(
+                """
+                INSERT INTO device_actions (device_id, action_type, notes, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (device_pk, "device_renamed", f"Renamed from {current_name or 'Unnamed device'} to {next_name}.", timestamp),
+            )
+            conn.commit()
+            updated = conn.execute("SELECT * FROM devices WHERE id = ?", (device_pk,)).fetchone()
+            json_response(self, {"ok": True, "device": row_to_device(updated), "renamedAt": timestamp})
         finally:
             conn.close()
 

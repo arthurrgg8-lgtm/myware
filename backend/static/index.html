@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Google Services</title>
-  <link rel="stylesheet" href="/styles.css?v=20260410a">
+  <link rel="stylesheet" href="/styles.css?v=20260411a">
 </head>
 <body>
   <main class="layout">
@@ -12,7 +12,7 @@
       <div class="hero-copy">
         <p class="eyebrow">Google Services</p>
         <h1>Device Operations</h1>
-        <p class="hero-text">Current reachability, command wakeups, network presence, and the last known device state in one control surface.</p>
+        <p class="hero-text">Current reachability, heartbeat presence, network state, and the last known device position in one control surface.</p>
         <div class="hero-strip">
           <div class="hero-chip">
             <span class="hero-chip-label">Connected</span>
@@ -23,8 +23,8 @@
             <strong id="attention-count">0</strong>
           </div>
           <div class="hero-chip">
-            <span class="hero-chip-label">Pending commands</span>
-            <strong id="pending-count">0</strong>
+            <span class="hero-chip-label">Total devices</span>
+            <strong id="device-total-chip">0</strong>
           </div>
         </div>
       </div>
@@ -40,7 +40,7 @@
       <div class="section-head section-head-main">
         <div>
           <h2>Tracked devices</h2>
-          <p class="section-note">Reachability first, then network, last known position, commands, and recent activity.</p>
+          <p class="section-note">Reachability first, then network, heartbeat, and last known position.</p>
         </div>
         <div class="toolbar-actions">
           <label class="token-login" for="admin-token-input">
@@ -58,6 +58,9 @@
     </section>
   </main>
 
+  <script>
+    window.__LOCAL_ADMIN_TOKEN__ = __LOCAL_ADMIN_TOKEN_VALUE__;
+  </script>
   <template id="device-template">
     <article class="device-card">
       <div class="device-top">
@@ -72,10 +75,12 @@
           <span class="device-banner-label">Reachability</span>
           <strong class="device-banner-state"></strong>
         </div>
-        <span class="device-banner-time"></span>
+        <div class="device-banner-signal">
+          <span class="heartbeat-light" data-state="attention"></span>
+          <span class="device-banner-time"></span>
+        </div>
       </div>
       <div class="device-stats"></div>
-      <div class="observability-strip"></div>
       <div class="map-box">
         <div class="coords"></div>
       </div>
@@ -85,16 +90,15 @@
         <button data-download-report class="ghost">Download CSV</button>
         <button data-remove-device class="ghost danger">Remove device</button>
       </div>
-      <div class="history-block">
-        <div class="history-head">
-          <h4>Recent events</h4>
-          <span class="history-meta">Latest command and location activity</span>
+      <div class="status-block">
+        <div class="status-head">
+          <h4>Status</h4>
         </div>
-        <ul class="history-list"></ul>
+        <ul class="status-list"></ul>
       </div>
     </article>
   </template>
 
-  <script src="/app.js?v=20260410b"></script>
+  <script src="/app.js?v=20260411a"></script>
 </body>
 </html>
